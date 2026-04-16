@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zero-Trust PII RAG</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;500;600;700&family=DM+Mono:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet">
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+</head>
+<body>
+    <div class="noise-overlay"></div>
+    
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <div class="wordmark">
+                <h1>Zero-Trust PII RAG</h1>
+                <div class="header-rule"></div>
+            </div>
+            <div class="status">
+                <span class="status-dot" id="connection-status"></span>
+                <span class="status-text" id="status-text">Connecting</span>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Left Panel: Input -->
+            <div class="panel input-panel">
+                <div class="input-section">
+                    <label for="ingest-data">Input Data</label>
+                    <textarea id="ingest-data" placeholder="Employee: John Doe
+Email: john.doe@company.com
+Phone: +91-98765-43210
+Aadhaar: 1234-5678-9012
+PAN: ABCDE1234F"></textarea>
+                    <button class="btn btn-primary" id="ingest-btn" onclick="ingestData()">
+                        Ingest Data
+                    </button>
+                </div>
+
+                <div class="input-section query-section">
+                    <label for="query-input">Query</label>
+                    <div class="query-wrapper">
+                        <input type="text" id="query-input" placeholder="What is John's email address?">
+                        <button class="btn btn-primary" id="query-btn" onclick="askQuestion()">
+                            Submit
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right Panel: Activity Feed -->
+            <div class="panel output-panel">
+                <div class="panel-header">
+                    <h2>Processing Log</h2>
+                </div>
+
+                <div class="activity-feed" id="activity-feed">
+                    <div class="empty-state">
+                        <p>System ready</p>
+                        <span class="hint">Enter data to begin ingestion</span>
+                    </div>
+                </div>
+
+                <div class="stats-section" id="stats-grid">
+                    <div class="stat-item">
+                        <span class="stat-label">Ingested</span>
+                        <span class="stat-value" id="stat-ingested">0</span>
+                    </div>
+                    <div class="stat-divider"></div>
+                    <div class="stat-item">
+                        <span class="stat-label">PII Masked</span>
+                        <span class="stat-value" id="stat-redacted">0</span>
+                    </div>
+                    <div class="stat-divider"></div>
+                    <div class="stat-item">
+                        <span class="stat-label">Queries</span>
+                        <span class="stat-value" id="stat-queries">0</span>
+                    </div>
+                    <div class="stat-divider"></div>
+                    <div class="stat-item">
+                        <span class="stat-label">Chunks</span>
+                        <span class="stat-value" id="stat-chunks">0</span>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <!-- Results Modal -->
+        <div class="modal" id="result-modal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3 id="modal-title">Result</h3>
+                    <button class="close-btn" onclick="closeModal()">&times;</button>
+                </div>
+                <div class="modal-body" id="modal-body">
+                </div>
+            </div>
+        </div>
+
+        <!-- Toast Notifications -->
+        <div class="toast-container" id="toast-container"></div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>

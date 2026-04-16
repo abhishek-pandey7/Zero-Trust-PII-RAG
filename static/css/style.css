@@ -134,6 +134,51 @@ body {
     border: 1px solid var(--border-color);
 }
 
+/* Instructions Panel */
+.instructions-panel {
+    margin-bottom: 32px;
+    padding: 24px 32px;
+}
+
+.instructions-panel h2 {
+    font-size: 1.125rem;
+    font-weight: 600;
+    margin-bottom: 8px;
+    letter-spacing: -0.01em;
+}
+
+.instructions-panel p {
+    color: var(--text-secondary);
+    font-size: 0.875rem;
+    margin-bottom: 16px;
+}
+
+.instructions-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding-left: 20px;
+    color: var(--text-secondary);
+    font-size: 0.875rem;
+}
+
+.instructions-list li {
+    line-height: 1.5;
+}
+
+.instructions-list strong {
+    color: var(--text-primary);
+}
+
+.instructions-list code {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    padding: 2px 6px;
+    font-family: 'DM Mono', monospace;
+    font-size: 0.85em;
+    border: 1px solid var(--border-light);
+}
+
 .panel-header {
     padding: 16px 20px;
     border-bottom: 1px solid var(--border-light);

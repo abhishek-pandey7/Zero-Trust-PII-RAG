@@ -26,6 +26,17 @@
             </div>
         </header>
 
+        <!-- Instructions Panel -->
+        <div class="instructions-panel panel">
+            <h2>Welcome to the Zero-Trust Sandbox</h2>
+            <p>This interface demonstrates a secure RAG pipeline that protects confidential data from reaching 3rd-party LLM providers.</p>
+            <ol class="instructions-list">
+                <li><strong>Ingest:</strong> Paste confidential employee records or healthcare data below. The system encrypts Names, Emails, SSNs, and PANs into secure tokens (e.g. <code>&lt;&lt;PERSON_01&gt;&gt;</code>).</li>
+                <li><strong>Verify:</strong> Watch the Processing Log to witness the aggressive real-time interception and dataset sanitization.</li>
+                <li><strong>Query:</strong> Ask a targeted question like <em>"What is John's email?"</em>. The LLM receives only masked tokens and the server safely unmasks the resulting answer locally.</li>
+            </ol>
+        </div>
+
         <!-- Main Content -->
         <main class="main-content">
             <!-- Left Panel: Input -->

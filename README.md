@@ -5,13 +5,13 @@ A production-ready RAG (Retrieval-Augmented Generation) pipeline that strictly m
 ## Table of Contents
 1. [Security Model](#security-model)
 2. [Architecture Overview](#architecture-overview)
-3. [Component Breakdown](#component-breakdown)
-4. [Installation and Setup](#installation-and-setup)
-5. [Configuration Parameters](#configuration-parameters)
-6. [Supported PII Types](#supported-pii-types)
-7. [Process Lifecycles](#process-lifecycles)
-8. [Usage Instructions](#usage-instructions)
-9. [Sample Data and Queries](#sample-data-and-queries)
+3. [Dashboard Features](#dashboard-features)
+4. [Component Breakdown](#component-breakdown)
+5. [Installation and Setup](#installation-and-setup)
+6. [Configuration Parameters](#configuration-parameters)
+7. [Supported PII Types](#supported-pii-types)
+8. [Process Lifecycles](#process-lifecycles)
+9. [Usage Instructions](#usage-instructions)
 10. [Audit Logging](#audit-logging)
 
 ---
@@ -34,8 +34,8 @@ User Input (Containing Plaintext PII)
 +---------------------------------------------------+
 |  pii_redactor.py                                  |
 |  - NLP processing via Microsoft Presidio          |
+|  - Strict newline truncation for entity bounds    |
 |  - Input sanitization (control characters)        |
-|  - Possessive normalization (stripping 's)        |
 |  - Token replacement                              |
 +---------------------------------------------------+
        |
@@ -84,16 +84,24 @@ User Query (Containing Plaintext PII)
 Final Answer (Unmasked Plaintext)
 ```
 
+## Dashboard Features
+
+The system includes a modern, responsive web interface built with a custom design system for real-time visualization and management:
+
+- **Pipeline View**: Real-time monitoring of document ingestion, PII detection, and RAG querying. Visualizes masked vs. unmasked text transitions.
+- **Vault Explorer**: A secure administrative view of all token-to-PII mappings stored in the local SQLite database.
+- **Compliance Audit Log**: Live stream of system operations and redaction events parsed from the JSON audit trail.
+- **Security Policies**: Read-only introspection of the active system configuration, including LLM parameters, embedding models, and confidence thresholds.
+- **Large-Scale Support**: Validated for documents exceeding 1,000,000 characters (e.g., bulk employee records).
+
 ## Component Breakdown
 
-The repository is modularized to ensure separation of concerns:
-
-- `src/zero_trust_rag/pipeline.py`: The orchestrator class (`ZeroTrustRAG`) combining text splitting, vector storage, and the Langchain orchestration logic.
-- `src/zero_trust_rag/pii_redactor.py`: Implements the `PIIRedactor` class leveraging `presidio-analyzer`. Contains specific logic to strip newline-span artifacts and normalizes trailing possessives to guarantee static token hashing.
-- `src/zero_trust_rag/vault.py`: Implements `PIIVault`, a thread-safe singleton utilizing SQLite for deterministic token mapping and system-restart survival.
-- `src/zero_trust_rag/audit_logger.py`: Implements logging facilities to `audit.log` tracking exact system changes locally.
-- `src/zero_trust_rag/utils.py`: Contains API key validators and execution decorators like `retry_on_api_error`.
-- `app.py`: A Flask and SocketIO web server presenting a real-time reactive user interface to visualize ingestion and unmasking steps live.
+- `src/zero_trust_rag/pipeline.py`: Orchestrator class (`ZeroTrustRAG`) managing text splitting, vector storage, and Langchain integration.
+- `src/zero_trust_rag/pii_redactor.py`: Implements `PIIRedactor` using `presidio-analyzer`. Features strict bound detection to prevent PII leakage across newline boundaries.
+- `src/zero_trust_rag/vault.py`: Implements `PIIVault`, providing thread-safe SQLite persistence for deterministic token mapping.
+- `src/zero_trust_rag/audit_logger.py`: Structured JSON logging for all security-relevant operations.
+- `src/zero_trust_rag/utils.py`: Input validation, API key verification, and error handling decorators.
+- `app.py`: Flask-SocketIO server presenting the reactive UI and WebSocket stream.
 
 ## Installation and Setup
 
@@ -133,117 +141,65 @@ The repository is modularized to ensure separation of concerns:
 
 ## Configuration Parameters
 
-All pipeline settings are centralized within `src/zero_trust_rag/config.yaml`. No code modifications are strictly required to configure the system limits.
+All pipeline settings are centralized within `config.yaml`.
 
 ### Configuration Sections
 
-- **llm**: Define provider (`groq`), model selection, and generation temperature.
-- **embeddings**: Model selection for vector encoding (defaults to `sentence-transformers/all-MiniLM-L6-v2`).
-- **chroma**: Set the storage directory for persisted embeddings.
-- **splitter**: Tuning parameters for `RecursiveCharacterTextSplitter` including `chunk_size` and `chunk_overlap`.
-- **retrieval**: The `top_k` documents to retrieve per query based on cosine similarity.
-- **presidio**: Lists the active internal recognizers and threshold scores (defaults to `0.6`).
-- **security**: Database paths and retry logic ceilings.
+- **llm**: Define provider (`groq`), model selection (e.g., `llama-3.3-70b-versatile`), and temperature.
+- **embeddings**: Model selection for vector encoding.
+- **chroma**: Persistent storage directory for embeddings.
+- **splitter**: Parameters for `RecursiveCharacterTextSplitter`.
+- **presidio**: Active recognizers and confidence thresholds (default: `0.6`).
+- **security**: Database paths and audit log locations.
 
 ## Supported PII Types
 
-The default configuration intercepts the following entity types via SpaCy NER and regex heuristics:
+The default configuration intercepts a wide array of entities via SpaCy NER and custom regex recognizers:
 
-- PERSON
-- EMAIL_ADDRESS
-- PHONE_NUMBER
-- US_SSN
-- CREDIT_CARD
-- IBAN_CODE
-- IP_ADDRESS
-- URL
-- LOCATION
-- DATE_TIME
-- NRP (Nationality, Religion, Political Affiliation)
-- MEDICAL_LICENSE
-- US_PASSPORT
-- US_DRIVER_LICENSE
-- IN_PAN (Indian Permanent Account Number via Custom Recognizer)
-- IN_AADHAAR (Indian Aadhaar via Custom Recognizer)
+- PERSON, EMAIL_ADDRESS, PHONE_NUMBER
+- US_SSN, CREDIT_CARD, IBAN_CODE
+- IP_ADDRESS, URL, LOCATION, DATE_TIME
+- IN_PAN (Indian PAN Card), IN_AADHAAR (Indian Aadhaar Number)
+- US_PASSPORT, US_DRIVER_LICENSE, MEDICAL_LICENSE
 
 ## Process Lifecycles
 
 ### The Ingestion Lifecycle
-1. **Input Validation**: Verifies that input length and types are valid.
-2. **Line-Preserving Sanitization**: Removes irregular control characters, keeping carriage returns and newlines intact.
-3. **Possessive Normalization**: Drops trailing grammatical possessives from names to prevent diverging token maps.
-4. **Vault Storage**: Assigns or retrieves unique cryptographic tokens for PII instances.
-5. **Mask Substitution**: Strings replacement applied linearly.
-6. **Vector Alignment**: Text split and stored in ChromaDB using local embedding models.
+1. **Input Validation**: Enforces length constraints (up to 1,000,000 characters).
+2. **Strict Bound Redaction**: Analyzes PII bounds and truncates at newlines to prevent cross-line contamination.
+3. **Vault Storage**: Assigns unique cryptographic tokens for each unique PII value.
+4. **Vector Alignment**: Stores masked chunks in ChromaDB via local embedding.
 
 ### The Querying Lifecycle
-1. **Query Redaction**: Real values in the user query are matched and explicitly tokenized.
-2. **Context Searching**: ChromaDB retrieves chunks associated mathematically with the prompt tokens.
-3. **LLM Inference**: The strictly masked prompt alongside corresponding masked chunks is fed to the remote Groq endpoint.
-4. **Response Interception**: The payload response is fetched securely.
-5. **Text Unmasking**: Cryptographic tokens are flipped back to their initial string representations via SQLite indices.
-6. **Log Output**: Output is transmitted back to the user interface.
+1. **Query Redaction**: Identifies PII in the user prompt and applies existing or new tokens.
+2. **Semantic Retrieval**: Fetches relevant masked chunks from the local vector database.
+3. **Remote Inference**: Sends masked context and query to the LLM endpoint (e.g., Groq).
+4. **Local Restoration**: Resolves response tokens using the private Vault and returns the unmasked answer.
 
 ## Usage Instructions
 
-### Direct API via Python
-
-```python
-from src import ZeroTrustRAG
-from dotenv import load_dotenv
-import os
-
-load_dotenv()
-
-# Initialize local pipeline
-rag = ZeroTrustRAG(groq_api_key=os.getenv("GROQ_API_KEY"))
-
-# Ingestion Step
-data = "Employee John Doe has PAN card ABCDE1234F."
-result = rag.ingest(data)
-print(f"Chunks: {result['chunks_created']}, PII Masked: {result['pii_redacted']}")
-
-# Actionable Query Step
-answer = rag.ask("What is the PAN card for John Doe?")
-print("Answer:", answer)
-```
-
-### Flask WebSocket UI Interface
-To run the interactive web interface incorporating real-time token tracking:
-
+### Web Interface
+To run the interactive dashboard:
 ```bash
 python app.py
 ```
-After executing, navigate to `http://localhost:5000` via web browser.
+Navigate to `http://localhost:5000`.
 
-## Sample Data and Queries
+### Direct API Usage
+```python
+from src import ZeroTrustRAG
+import os
 
-To effectively test the Zero-Trust implementation, use the variations shown below. Notice the relationships across different datatypes.
-
-### Indian Documentation Context
-```text
-KYC Verification Document
-Name: Rajesh Kumar Sharma
-Aadhaar: 2345-6789-0123
-PAN: CDEFG5678H
-Mobile: +91-98765-43210
-Email: rajesh.sharma@mumbai.co.in
-Address: Flat 301, Sunrise Apartments, Andheri West, Mumbai, Maharashtra 400058
+rag = ZeroTrustRAG(groq_api_key=os.getenv("GROQ_API_KEY"))
+rag.ingest("Employee John Doe (Aadhaar: 1234-5678-9012) joined today.")
+answer = rag.ask("What is John Doe's Aadhaar?")
+print(answer)
 ```
-
-### Potential Queries
-- "What is the PAN and Aadhaar number for the employee with email rajesh.sharma@mumbai.co.in?"
-- "What is the email address for Rajesh Kumar Sharma's manager?"
-- "Show me all mobile numbers tied to the Mumbai branch."
 
 ## Audit Logging
 
-Strict compliance requires non-repudiation tracking. Everything resides sequentially within the `audit.log` file formatting JSON rows directly:
-
+Operations are recorded in `audit.log` as sequential JSON lines for SIEM integration:
 ```json
-{"timestamp": "2026-04-16T10:30:00Z", "event_type": "ingest", "entity_type": "PERSON", "token": "<<PERSON_01_A1B2>>", "action": "mask"}
-{"timestamp": "2026-04-16T10:30:01Z", "event_type": "ask", "status": "success", "details": {"pii_in_question": 1, "context_chunks": 3}}
+{"timestamp": "2026-05-15T21:00:00Z", "event_type": "redaction", "entity_type": "PERSON", "token": "<<PERSON_01_A1B2>>", "action": "mask"}
 ```
 
-## License
-MIT License.

@@ -132,3 +132,10 @@ class PIIVault:
             with self._get_connection() as conn:
                 cursor = conn.execute("SELECT token, real_value FROM token_mappings")
                 return {row["token"]: row["real_value"] for row in cursor}
+
+    def get_all_mappings(self) -> list[dict]:
+        """Get all token mappings with full details for the UI."""
+        with self._lock:
+            with self._get_connection() as conn:
+                cursor = conn.execute("SELECT token, entity_type, real_value, created_at FROM token_mappings ORDER BY created_at DESC")
+                return [dict(row) for row in cursor]

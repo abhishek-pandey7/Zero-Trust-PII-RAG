@@ -9,9 +9,92 @@ This module provides a complete RAG pipeline with:
 - Configurable parameters via config.yaml
 """
 import os
+import hashlib
+import shutil
 import logging
 from typing import Optional
-from langchain_huggingface import HuggingFaceEndpointEmbeddings
+import requests as _requests
+from langchain_core.embeddings import Embeddings
+
+
+class _HFApiEmbeddings(Embeddings):
+    """Ultra-lightweight HuggingFace Inference API embeddings — no torch, no local models.
+    Uses huggingface_hub InferenceClient which handles routing and warm-up automatically.
+    """
+    def __init__(self, api_key: str, model: str = "sentence-transformers/all-MiniLM-L6-v2"):
+        try:
+            from huggingface_hub import InferenceClient
+            self._client = InferenceClient(token=api_key)
+        except ImportError:
+            self._client = None
+        self.api_key = api_key
+        self.model = model
+        # Keep raw requests fallback URLs
+        self._url_pipeline = f"https://api-inference.huggingface.co/pipeline/feature-extraction/{model}"
+        self._url_models   = f"https://api-inference.huggingface.co/models/{model}"
+
+    def _mean_pool(self, token_vecs: list) -> list:
+        """Mean-pool token embeddings to a single sentence vector."""
+        n = len(token_vecs)
+        dim = len(token_vecs[0])
+        return [sum(token_vecs[t][d] for t in range(n)) / n for d in range(dim)]
+
+    def _embed_via_client(self, texts: list) -> list:
+        """Use huggingface_hub InferenceClient (preferred path)."""
+        embeddings = []
+        for text in texts:
+            vec = self._client.feature_extraction(text=text, model=self.model)
+            # vec may be numpy array or nested list
+            if hasattr(vec, "tolist"):
+                vec = vec.tolist()
+            # If 2D (seq_len, dim), mean-pool
+            if vec and isinstance(vec[0], list):
+                vec = self._mean_pool(vec)
+            embeddings.append(vec)
+        return embeddings
+
+    def _embed_via_requests(self, texts: list) -> list:
+        """Fallback: raw HTTP to the pipeline endpoint."""
+        for url in [self._url_pipeline, self._url_models]:
+            try:
+                resp = _requests.post(
+                    url,
+                    headers={"Authorization": f"Bearer {self.api_key}"},
+                    json={"inputs": texts, "options": {"wait_for_model": True}},
+                    timeout=90
+                )
+                if resp.status_code == 404:
+                    continue
+                resp.raise_for_status()
+                result = resp.json()
+                embeddings = []
+                for item in result:
+                    if item and isinstance(item[0], list):
+                        embeddings.append(self._mean_pool(item))
+                    else:
+                        embeddings.append(item)
+                return embeddings
+            except Exception:
+                continue
+        raise RuntimeError(
+            f"HuggingFace embedding API unavailable for model '{self.model}'. "
+            "Check that HUGGINGFACEHUB_API_TOKEN is valid and the model is hosted on the free tier."
+        )
+
+    def _embed(self, texts: list) -> list:
+        if self._client is not None:
+            try:
+                return self._embed_via_client(texts)
+            except Exception:
+                pass  # fall through to raw requests
+        return self._embed_via_requests(texts)
+
+    def embed_documents(self, texts: list) -> list:
+        return self._embed(texts)
+
+    def embed_query(self, text: str) -> list:
+        return self._embed([text])[0]
+
 from langchain_groq import ChatGroq
 from langchain_community.vectorstores import Chroma
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -79,9 +162,9 @@ class ZeroTrustRAG:
         validate_api_key(groq_api_key, "Groq")
         validate_api_key(hf_api_key, "HuggingFace")
 
-        self.embeddings = HuggingFaceEndpointEmbeddings(
-            model=config.get("embeddings.model", "sentence-transformers/all-MiniLM-L6-v2"),
-            huggingfacehub_api_token=hf_api_key
+        self.embeddings = _HFApiEmbeddings(
+            api_key=hf_api_key,
+            model=config.get("embeddings.model", "sentence-transformers/all-MiniLM-L6-v2")
         )
 
         self.llm = ChatGroq(
@@ -114,6 +197,13 @@ class ZeroTrustRAG:
             embedding_function=self.embeddings
         )
 
+    @staticmethod
+    def _stable_id(text: str) -> str:
+        """Generate a deterministic UUID-like ID from text content to prevent duplicate entries."""
+        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        # Format as UUID: 8-4-4-4-12
+        return f"{digest[:8]}-{digest[8:12]}-{digest[12:16]}-{digest[16:20]}-{digest[20:32]}"
+
     @retry_on_api_error()
     def _add_texts_to_vector_db(self, texts: list[str]) -> None:
         if self.vector_db is None:
@@ -121,7 +211,10 @@ class ZeroTrustRAG:
                 persist_directory=self._persist_directory,
                 embedding_function=self.embeddings
             )
-        self.vector_db.add_texts(texts)
+        # Use content-derived stable IDs so re-ingesting the same text
+        # does not produce duplicate ChromaDB entries with new UUIDs.
+        ids = [self._stable_id(t) for t in texts]
+        self.vector_db.add_texts(texts, ids=ids)
 
     def ingest(self, text_content: str) -> dict:
         """
@@ -231,7 +324,34 @@ class ZeroTrustRAG:
         }
 
     def clear_vector_db(self) -> None:
-        """Clear the vector database."""
-        if self.vector_db:
-            self.vector_db = None
-            logger.info("Vector database cleared")
+        """Remove all documents from the Chroma collection without dropping the store."""
+        if self.vector_db is None:
+            self.vector_db = Chroma(
+                persist_directory=self._persist_directory,
+                embedding_function=self.embeddings
+            )
+        try:
+            all_ids = self.vector_db.get()["ids"]
+            if all_ids:
+                self.vector_db.delete(ids=all_ids)
+                logger.info(f"Deleted {len(all_ids)} documents from vector DB")
+            else:
+                logger.info("Vector DB already empty")
+        except Exception as e:
+            logger.warning(f"Could not clear vector DB documents: {e}")
+
+    def reset_vector_db(self) -> None:
+        """Wipe the persisted ChromaDB store from disk entirely.
+
+        Use this before evaluation runs to guarantee a clean slate and
+        prevent stale document IDs from previous sessions from appearing
+        in retrieval results.
+        """
+        self.vector_db = None
+        store_path = self._persist_directory
+        if os.path.exists(store_path):
+            shutil.rmtree(store_path)
+            logger.info(f"Wiped persisted vector store at: {store_path}")
+        # Re-initialise a fresh empty store
+        self._init_vector_db()
+        logger.info("Fresh empty vector DB initialised")

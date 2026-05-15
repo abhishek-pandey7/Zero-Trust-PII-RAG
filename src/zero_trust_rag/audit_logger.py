@@ -57,3 +57,22 @@ class AuditLogger:
             "pii_accessed": pii_accessed
         }
         self._logger.info(json.dumps(event))
+
+    def get_recent_logs(self, limit: int = 50) -> list[dict]:
+        """Read recent logs from the file for the UI."""
+        logs = []
+        try:
+            if not Path(self._log_path).exists():
+                return []
+            
+            with open(self._log_path, 'r', encoding='utf-8') as f:
+                # Read all lines and take the last N
+                lines = f.readlines()
+                for line in reversed(lines[-limit:]):
+                    try:
+                        logs.append(json.loads(line.strip()))
+                    except json.JSONDecodeError:
+                        continue
+        except Exception as e:
+            print(f"Error reading audit logs: {e}")
+        return logs

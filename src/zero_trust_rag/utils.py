@@ -52,7 +52,7 @@ def validate_api_key(api_key: str | None, provider: str) -> None:
         raise ValidationError(f"Invalid {provider} API key. Key seems too short.")
 
 
-def validate_input(text: str, max_length: int = 100000) -> None:
+def validate_input(text: str, max_length: int = 1000000) -> None:
     if not text:
         raise ValidationError("Input text cannot be empty")
     

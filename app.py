@@ -8,6 +8,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 from flask import Flask, render_template, request, jsonify
 from flask_socketio import SocketIO, emit
+import tempfile
 
 from src import ZeroTrustRAG, ZeroTrustRAGError, ValidationError, APIError
 
@@ -107,6 +108,108 @@ def api_ingest():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+def extract_text_from_file(filepath, filename):
+    """Extract text from uploaded files (PDF, DOCX, TXT)."""
+    ext = filename.rsplit('.', 1)[-1].lower() if '.' in filename else ''
+    
+    if ext == 'txt':
+        with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+            return f.read()
+    
+    elif ext == 'pdf':
+        try:
+            import fitz  # PyMuPDF
+            doc = fitz.open(filepath)
+            text = ''
+            for page in doc:
+                text += page.get_text()
+            doc.close()
+            return text
+        except ImportError:
+            raise ValueError("PDF support requires PyMuPDF. Install with: pip install PyMuPDF")
+    
+    elif ext in ('docx', 'doc'):
+        try:
+            from docx import Document
+            doc = Document(filepath)
+            return '\n'.join([p.text for p in doc.paragraphs])
+        except ImportError:
+            raise ValueError("DOCX support requires python-docx. Install with: pip install python-docx")
+    
+    else:
+        raise ValueError(f"Unsupported file type: .{ext}. Supported: .txt, .pdf, .docx")
+
+
+@app.route('/api/upload', methods=['POST'])
+def api_upload():
+    """Upload a document file for ingestion."""
+    try:
+        if 'file' not in request.files:
+            return jsonify({'success': False, 'error': 'No file provided'}), 400
+        
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({'success': False, 'error': 'No file selected'}), 400
+        
+        # Save to temp file
+        with tempfile.NamedTemporaryFile(delete=False, suffix='_' + file.filename) as tmp:
+            file.save(tmp.name)
+            tmp_path = tmp.name
+        
+        try:
+            # Extract text
+            text = extract_text_from_file(tmp_path, file.filename)
+            
+            if not text or not text.strip():
+                return jsonify({'success': False, 'error': 'No text content found in file'}), 400
+            
+            bot = get_rag()
+            
+            socketio.emit('ingestion_start', {
+                'text_length': len(text),
+                'source': file.filename,
+                'timestamp': datetime.utcnow().isoformat() + 'Z'
+            })
+            
+            result = bot.ingest(text)
+            
+            if result.get('redaction_details'):
+                socketio.emit('pii_detected', {
+                    'count': len(result['redaction_details']),
+                    'entities': result['redaction_details'],
+                    'timestamp': datetime.utcnow().isoformat() + 'Z'
+                })
+            
+            socketio.emit('ingestion_complete', {
+                'chunks_created': result['chunks_created'],
+                'redacted_count': result['pii_redacted'],
+                'source': file.filename,
+                'timestamp': datetime.utcnow().isoformat() + 'Z'
+            })
+            
+            redactor = bot.redactor
+            masked_text, _ = redactor.redact(text, "display")
+            
+            return jsonify({
+                'success': True,
+                'filename': file.filename,
+                'original_text': text[:500] + ('...' if len(text) > 500 else ''),
+                'masked_text': masked_text[:500] + ('...' if len(masked_text) > 500 else ''),
+                'chunks_created': result['chunks_created'],
+                'pii_redacted': result['pii_redacted'],
+                'redaction_details': result['redaction_details'],
+                'char_count': len(text)
+            })
+        finally:
+            os.unlink(tmp_path)
+    
+    except ValueError as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
+    except Exception as e:
+        socketio.emit('error', {'message': f'Upload error: {e}'})
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/api/ask', methods=['POST'])
 def api_ask():
     """API endpoint for querying with real-time streaming updates."""
@@ -186,6 +289,60 @@ def api_stats():
             'success': False,
             'error': str(e)
         }), 500
+
+
+@app.route('/api/vault', methods=['GET'])
+def api_vault():
+    """Get all token mappings from the vault."""
+    try:
+        bot = get_rag()
+        mappings = bot.vault.get_all_mappings()
+        return jsonify({
+            'success': True,
+            'mappings': mappings
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/audit', methods=['GET'])
+def api_audit():
+    """Get recent audit logs."""
+    try:
+        bot = get_rag()
+        logs = bot.audit.get_recent_logs(limit=50)
+        return jsonify({
+            'success': True,
+            'logs': logs
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/policies', methods=['GET'])
+def api_policies():
+    """Get current security policies/config."""
+    from src.zero_trust_rag.config import Config
+    cfg = Config()
+    # Mask API keys and sensitive info
+    clean_cfg = {
+        "llm": {
+            "model": cfg.get("llm.model"),
+            "temperature": cfg.get("llm.temperature")
+        },
+        "embeddings": {
+            "model": cfg.get("embeddings.model")
+        },
+        "security": {
+            "score_threshold": cfg.get("security.score_threshold"),
+            "vault_path": cfg.get("security.vault_db_path"),
+            "audit_path": cfg.get("security.audit_log_path")
+        }
+    }
+    return jsonify({
+        'success': True,
+        'policies': clean_cfg
+    })
 
 
 @app.route('/api/health', methods=['GET'])

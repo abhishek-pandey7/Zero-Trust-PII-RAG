@@ -95,7 +95,7 @@ class PIIRedactor:
         
         nlp_configuration = {
             "nlp_engine_name": "spacy",
-            "models": [{"lang_code": "en", "model_name": "en_core_web_lg"}]
+            "models": [{"lang_code": "en", "model_name": "en_core_web_sm"}]
         }
         nlp_engine = NlpEngineProvider(nlp_configuration=nlp_configuration).create_engine()
         
@@ -133,15 +133,17 @@ class PIIRedactor:
 
         corrected_results = []
         for result in results:
+            matched_text = sanitized[result.start:result.end]
+            
+            # Prevent entities from spanning across newlines (common issue in structured records)
+            if '\n' in matched_text:
+                # Truncate at the newline
+                result.end = result.start + matched_text.index('\n')
+            elif '\r' in matched_text:
+                result.end = result.start + matched_text.index('\r')
+                
+            # Entity-specific post-processing
             if result.entity_type == "PERSON":
-                matched_text = sanitized[result.start:result.end]
-                # Prevent PERSON entities from spanning across newlines
-                if '\n' in matched_text:
-                    # Truncate at the newline
-                    result.end = result.start + matched_text.index('\n')
-                elif '\r' in matched_text:
-                    result.end = result.start + matched_text.index('\r')
-                    
                 # Trim trailing spaces if any
                 while result.end > result.start and sanitized[result.end-1].isspace():
                     result.end -= 1

@@ -1,360 +1,654 @@
 /**
- * Zero-Trust PII RAG – Frontend
+ * Zero-Trust PII RAG — Frontend Logic
+ * Skills: taste-design, emildesign (Emil Kowalski), framermotion
+ *
+ * Key principles applied:
+ * - Motion via CDN `window.Motion.animate` for spring physics
+ * - Hardware-accelerated transforms only (never top/left/width/height)
+ * - Emil: ease-out for entries, never ease-in for UI
+ * - Emil: buttons scale(0.97) on :active (CSS), blur during loading
+ * - Stagger delays 40-60ms between items
+ * - Reduced motion respected
+ * - No emojis anywhere
  */
 
-const socket = io({
+(function () {
+  'use strict';
+
+  // ── Socket Setup ──────────────────────────────────────
+  const socket = io({
     transports: ['websocket', 'polling'],
     reconnection: true,
     reconnectionAttempts: 5,
     reconnectionDelay: 1000
-});
+  });
 
-let stats = {
-    ingested: 0,
-    redacted: 0,
-    queries: 0,
-    chunks: 0
-};
+  let stats = { ingested: 0, redacted: 0, queries: 0, chunks: 0 };
+  let isIngesting = false;
+  let isAsking = false;
+  let isUploading = false;
 
-let isIngesting = false;
-let isAsking = false;
+  // ── DOM References ────────────────────────────────────
+  const $ = (id) => document.getElementById(id);
+  const activityFeed = $('activity-feed');
+  const statusDot = $('connection-status');
+  const statusText = $('status-text');
+  const ingestBtn = $('ingest-btn');
+  const queryBtn = $('query-btn');
+  const uploadBtn = $('upload-btn');
+  const modal = $('result-modal');
+  const modalBackdrop = $('modal-backdrop');
+  const modalCloseBtn = $('modal-close-btn');
+  const fileInput = $('file-input');
+  const uploadZone = $('upload-zone');
+  const uploadFilename = $('upload-filename');
+  const filenameText = $('filename-text');
+  const uploadShimmer = $('upload-shimmer');
 
-const activityFeed = document.getElementById('activity-feed');
-const statusDot = document.getElementById('connection-status');
-const statusText = document.getElementById('status-text');
-const ingestBtn = document.getElementById('ingest-btn');
-const queryBtn = document.getElementById('query-btn');
-const modal = document.getElementById('result-modal');
+  // ── Socket Events ─────────────────────────────────────
 
-socket.on('connect', () => {
-    statusDot.className = 'status-dot connected';
-    statusText.textContent = 'Connected';
-    showToast('Connected', 'success');
-});
+  socket.on('connect', () => {
+    statusDot.className = 'conn-dot connected';
+    statusText.textContent = 'CONNECTED';
+    showToast('Secure pipeline established.', 'success');
+  });
 
-socket.on('disconnect', () => {
-    statusDot.className = 'status-dot';
-    statusText.textContent = 'Disconnected';
-});
+  socket.on('disconnect', () => {
+    statusDot.className = 'conn-dot error';
+    statusText.textContent = 'DISCONNECTED';
+  });
 
-socket.on('connect_error', () => {
-    statusDot.className = 'status-dot error';
-    statusText.textContent = 'Error';
-});
+  socket.on('connect_error', () => {
+    statusDot.className = 'conn-dot error';
+    statusText.textContent = 'ERROR';
+  });
 
-socket.on('ingestion_start', (data) => {
+  socket.on('ingestion_start', (data) => {
+    const source = data.source ? ` from ${data.source}` : '';
     addActivity({
-        type: 'warning',
-        title: 'Ingestion started',
-        text: `Processing ${data.text_length} characters`,
-        timestamp: data.timestamp
+      type: 'warning',
+      title: 'Ingestion Protocol Initiated',
+      text: `Processing ${data.text_length.toLocaleString()} characters${source}`,
+      timestamp: data.timestamp
     });
-});
+  });
 
-socket.on('pii_detected', (data) => {
-    const entityList = data.entities.map(e => 
-        `<span class="token">${escapeHtml(e.original_value)}</span>`
-    ).join(', ');
-    
+  socket.on('pii_detected', (data) => {
+    const entityList = data.entities
+      .map((e) => `<span class="token">${escapeHtml(e.original_value)}</span>`)
+      .join(', ');
     addActivity({
-        type: 'info',
-        title: 'PII detected',
-        text: `${data.count} entities: ${entityList}`,
-        timestamp: data.timestamp
+      type: 'info',
+      title: 'PII Intercepted',
+      text: `${data.count} entities identified and masked: ${entityList}`,
+      timestamp: data.timestamp
     });
-});
+  });
 
-socket.on('ingestion_complete', (data) => {
+  socket.on('ingestion_complete', (data) => {
     stats.ingested++;
     stats.redacted += data.redacted_count;
     stats.chunks += data.chunks_created;
     updateStats();
-    
+    const source = data.source ? ` (${data.source})` : '';
     addActivity({
-        type: 'success',
-        title: 'Ingestion complete',
-        text: `${data.chunks_created} chunks created, ${data.redacted_count} PII masked`,
-        timestamp: data.timestamp
+      type: 'success',
+      title: 'Redaction Complete',
+      text: `${data.chunks_created} secure chunks created, ${data.redacted_count} PII tokens masked${source}`,
+      timestamp: data.timestamp
     });
-    
-    showToast('Data ingested', 'success');
-});
+    showToast('Dataset ingested securely.', 'success');
+  });
 
-socket.on('query_processing', (data) => {
+  socket.on('query_processing', (data) => {
     addActivity({
-        type: 'warning',
-        title: 'Query processing',
-        text: `"${data.question}"`,
-        timestamp: data.timestamp
+      type: 'warning',
+      title: 'Executing LLM Query',
+      text: `Transmitting masked prompt to Groq endpoint`,
+      timestamp: data.timestamp
     });
-});
+  });
 
-socket.on('query_complete', (data) => {
+  socket.on('query_complete', (data) => {
     stats.queries++;
     updateStats();
-    
     addActivity({
-        type: 'success',
-        title: 'Answer generated',
-        text: data.answer.substring(0, 100) + (data.answer.length > 100 ? '...' : ''),
-        timestamp: data.timestamp
+      type: 'success',
+      title: 'Query Resolved',
+      text: `Response received and unmasked locally`,
+      timestamp: data.timestamp
     });
-});
+  });
 
-socket.on('error', (data) => {
+  socket.on('error', (data) => {
     addActivity({
-        type: 'error',
-        title: 'Error',
-        text: data.message,
-        timestamp: new Date().toISOString()
+      type: 'error',
+      title: 'System Fault',
+      text: data.message,
+      timestamp: new Date().toISOString()
     });
-    
     showToast(data.message, 'error');
-});
+    resetButtons();
+  });
 
-async function ingestData() {
-    const textarea = document.getElementById('ingest-data');
-    const data = textarea.value.trim();
-    
-    if (!data) {
-        showToast('Enter data to ingest', 'warning');
-        return;
-    }
-    
-    if (isIngesting) return;
-    
-    isIngesting = true;
-    ingestBtn.disabled = true;
-    ingestBtn.innerHTML = '<span class="spinner"></span> Processing';
-    
-    try {
-        const response = await fetch('/api/ingest', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ data })
-        });
-        
-        const result = await response.json();
-        
-        if (result.success) {
-            showComparisonModal('Ingestion Result', result);
-            textarea.value = '';
-        } else {
-            showToast(result.error || 'Ingestion failed', 'error');
-        }
-    } catch (error) {
-        showToast('Network error: ' + error.message, 'error');
-    } finally {
-        isIngesting = false;
-        ingestBtn.disabled = false;
-        ingestBtn.innerHTML = 'Ingest Data';
-    }
-}
+  // ── User Actions ──────────────────────────────────────
 
-async function askQuestion() {
-    const input = document.getElementById('query-input');
-    const question = input.value.trim();
-    
-    if (!question) {
-        showToast('Enter a question', 'warning');
-        return;
-    }
-    
-    if (isAsking) return;
-    
-    isAsking = true;
-    queryBtn.disabled = true;
-    queryBtn.innerHTML = '<span class="spinner"></span>';
-    
-    try {
-        const response = await fetch('/api/ask', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ question })
-        });
-        
-        const result = await response.json();
-        
-        if (result.success) {
-            showResultModal('Answer', result);
-            input.value = '';
-        } else {
-            showToast(result.error || 'Query failed', 'error');
-        }
-    } catch (error) {
-        showToast('Network error: ' + error.message, 'error');
-    } finally {
-        isAsking = false;
-        queryBtn.disabled = false;
-        queryBtn.innerHTML = 'Submit';
-    }
-}
+  ingestBtn.addEventListener('click', ingestData);
+  queryBtn.addEventListener('click', askQuestion);
+  uploadBtn.addEventListener('click', uploadFile);
+  modalBackdrop.addEventListener('click', closeModal);
+  modalCloseBtn.addEventListener('click', closeModal);
 
-function addActivity({ type, title, text, timestamp }) {
-    if (activityFeed.querySelector('.empty-state')) {
-        activityFeed.innerHTML = '';
-    }
-    
-    const item = document.createElement('div');
-    item.className = `activity-item ${type}`;
-    
-    const time = new Date(timestamp).toLocaleTimeString('en-US', {
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-        hour12: false
+  // ── Navigation ────────────────────────────────────────
+
+  const navLinks = {
+    'nav-pipeline': 'view-pipeline',
+    'nav-policies': 'view-policies',
+    'nav-vault': 'view-vault',
+    'nav-audit': 'view-audit'
+  };
+
+  Object.entries(navLinks).forEach(([navId, viewId]) => {
+    $(navId).addEventListener('click', (e) => {
+      e.preventDefault();
+      switchView(navId, viewId);
     });
-    
-    item.innerHTML = `
-        <div class="activity-title">${title}</div>
-        <div class="activity-text">${text}</div>
-        <div class="activity-meta">
-            <span class="activity-time">${time}</span>
-        </div>
-    `;
-    
-    activityFeed.insertBefore(item, activityFeed.firstChild);
-    
-    while (activityFeed.children.length > 30) {
-        activityFeed.removeChild(activityFeed.lastChild);
+  });
+
+  function switchView(activeNavId, activeViewId) {
+    // Update nav links
+    Object.keys(navLinks).forEach(id => {
+      $(id).classList.toggle('active', id === activeNavId);
+    });
+
+    // Update views
+    Object.values(navLinks).forEach(id => {
+      $(id).style.display = id === activeViewId ? 'block' : 'none';
+    });
+
+    // Fetch data if needed
+    if (activeViewId === 'view-vault') fetchVault();
+    if (activeViewId === 'view-audit') fetchAudit();
+    if (activeViewId === 'view-policies') fetchPolicies();
+
+    // Emil: Subtle entry animation for the card
+    const activeView = $(activeViewId);
+    if (window.Motion && window.Motion.animate) {
+      window.Motion.animate(
+        activeView,
+        { opacity: [0, 1], y: [10, 0] },
+        { duration: 0.4, easing: [0.23, 1, 0.32, 1] }
+      );
     }
-}
+  }
 
-function updateStats() {
-    document.getElementById('stat-ingested').textContent = stats.ingested;
-    document.getElementById('stat-redacted').textContent = stats.redacted;
-    document.getElementById('stat-queries').textContent = stats.queries;
-    document.getElementById('stat-chunks').textContent = stats.chunks;
-}
+  async function fetchVault() {
+    const tableBody = $('vault-table-body');
+    tableBody.innerHTML = '<tr><td colspan="4" style="text-align:center; padding: 40px; opacity: 0.5;">Accessing secure vault...</td></tr>';
 
-function showComparisonModal(title, data) {
-    const body = document.getElementById('modal-body');
-    document.getElementById('modal-title').textContent = title;
-    
-    const entityList = data.redaction_details?.map(e => 
-        `<li><span class="token">${e.token}</span> ← ${escapeHtml(e.original_value)} <span style="color: var(--text-muted); font-size: 0.75rem;">(${e.entity_type})</span></li>`
-    ).join('') || '<li>No PII detected</li>';
-    
-    body.innerHTML = `
-        <div class="result-section">
-            <h4>Original vs Masked</h4>
-            <div class="comparison">
-                <div class="comparison-column">
-                    <h5>Original</h5>
-                    <div class="result-box">${escapeHtml(data.original_text)}</div>
-                </div>
-                <div class="comparison-column masked">
-                    <h5>Masked</h5>
-                    <div class="result-box">${escapeHtml(data.masked_text)}</div>
-                </div>
+    try {
+      const res = await fetch('/api/vault');
+      const data = await res.json();
+      if (data.success) {
+        if (data.mappings.length === 0) {
+          tableBody.innerHTML = '<tr><td colspan="4" style="text-align:center; padding: 40px; opacity: 0.5;">Vault is empty. Ingest data to see mappings.</td></tr>';
+          return;
+        }
+
+        tableBody.innerHTML = data.mappings.map(m => `
+          <tr>
+            <td><code class="token">${escapeHtml(m.token)}</code></td>
+            <td><span class="badge">${escapeHtml(m.entity_type)}</span></td>
+            <td>${escapeHtml(m.real_value)}</td>
+            <td><span class="time-stamp">${new Date(m.created_at).toLocaleString()}</span></td>
+          </tr>
+        `).join('');
+      }
+    } catch (err) {
+      showToast('Failed to fetch vault data.', 'error');
+    }
+  }
+
+  async function fetchAudit() {
+    const container = $('audit-log-content');
+    container.innerHTML = '<div style="text-align:center; padding: 40px; opacity: 0.5;">Retrieving audit trail...</div>';
+
+    try {
+      const res = await fetch('/api/audit');
+      const data = await res.json();
+      if (data.success) {
+        if (data.logs.length === 0) {
+          container.innerHTML = '<div style="text-align:center; padding: 40px; opacity: 0.5;">No audit logs found.</div>';
+          return;
+        }
+
+        container.innerHTML = data.logs.map(log => {
+          const type = log.event_type || 'info';
+          const statusClass = log.status === 'error' ? 'audit-error' : (log.action === 'mask' ? 'audit-mask' : 'audit-info');
+          
+          let details = '';
+          if (log.details) {
+            details = `<div class="audit-details">${JSON.stringify(log.details)}</div>`;
+          } else if (log.token) {
+            details = `<div class="audit-token">Token: <code>${log.token}</code></div>`;
+          }
+
+          return `
+            <div class="audit-entry">
+              <div class="audit-header">
+                <span class="audit-type ${statusClass}">${type.toUpperCase()}</span>
+                <span class="audit-time">${new Date(log.timestamp).toLocaleString()}</span>
+              </div>
+              <div class="audit-body">
+                ${log.text_preview ? `<div class="audit-preview">"${escapeHtml(log.text_preview)}..."</div>` : ''}
+                ${log.status === 'error' ? `<div class="audit-msg error">${escapeHtml(log.details.error || 'Unknown error')}</div>` : ''}
+                ${details}
+              </div>
             </div>
-        </div>
-        <div class="result-section">
-            <h4>PII Tokens</h4>
-            <div class="result-box">
-                <ul style="list-style: none; padding-left: 0; margin: 0;">
-                    ${entityList}
-                </ul>
-            </div>
-        </div>
-        <div class="result-section">
-            <h4>Stats</h4>
-            <div style="display: flex; gap: 24px;">
-                <div>
-                    <span style="font-size: 0.6875rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-muted);">Chunks</span>
-                    <div style="font-family: 'DM Mono', monospace; font-size: 1.25rem; font-weight: 600;">${data.chunks_created}</div>
-                </div>
-                <div>
-                    <span style="font-size: 0.6875rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-muted);">PII Masked</span>
-                    <div style="font-family: 'DM Mono', monospace; font-size: 1.25rem; font-weight: 600;">${data.pii_redacted}</div>
-                </div>
-            </div>
-        </div>
+          `;
+        }).join('');
+      }
+    } catch (err) {
+      showToast('Failed to fetch audit logs.', 'error');
+    }
+  }
+
+  async function fetchPolicies() {
+    const container = $('policies-content');
+    container.innerHTML = '<div style="text-align:center; padding: 40px; opacity: 0.5;">Loading configuration...</div>';
+
+    try {
+      const res = await fetch('/api/policies');
+      const data = await res.json();
+      if (data.success) {
+        const p = data.policies;
+        container.innerHTML = `
+          <div class="policy-group">
+            <h5>LLM Provider (Groq)</h5>
+            <div class="policy-item"><span>Model</span> <strong>${p.llm.model}</strong></div>
+            <div class="policy-item"><span>Temperature</span> <strong>${p.llm.temperature}</strong></div>
+          </div>
+          <div class="policy-group">
+            <h5>Embedding Engine (HuggingFace)</h5>
+            <div class="policy-item"><span>Model</span> <strong>${p.embeddings.model}</strong></div>
+          </div>
+          <div class="policy-group">
+            <h5>Redaction Heuristics (Presidio)</h5>
+            <div class="policy-item"><span>Confidence Threshold</span> <strong>${p.security.score_threshold}</strong></div>
+          </div>
+          <div class="policy-group">
+            <h5>Storage Persistence</h5>
+            <div class="policy-item"><span>Vault DB</span> <code>${p.security.vault_path}</code></div>
+            <div class="policy-item"><span>Audit Log</span> <code>${p.security.audit_path}</code></div>
+          </div>
+        `;
+      }
+    } catch (err) {
+      showToast('Failed to fetch policies.', 'error');
+    }
+  }
+
+  async function ingestData() {
+    if (isIngesting) return;
+    const textarea = $('ingest-data');
+    const text = textarea.value.trim();
+    if (!text) {
+      showToast('Payload is empty. Paste text first.', 'warning');
+      return;
+    }
+
+    isIngesting = true;
+    setButtonLoading(ingestBtn, true);
+
+    try {
+      const res = await fetch('/api/ingest', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ data: text })
+      });
+      if (!res.ok) {
+        const d = await res.json();
+        throw new Error(d.error || 'Ingestion failed');
+      }
+      textarea.value = '';
+    } catch (err) {
+      showToast(err.message, 'error');
+      addActivity({
+        type: 'error',
+        title: 'Ingestion Failed',
+        text: err.message,
+        timestamp: new Date().toISOString()
+      });
+    } finally {
+      isIngesting = false;
+      setButtonLoading(ingestBtn, false);
+    }
+  }
+
+  async function askQuestion() {
+    if (isAsking) return;
+    const input = $('query-input');
+    const question = input.value.trim();
+    if (!question) {
+      showToast('Query string is empty.', 'warning');
+      return;
+    }
+
+    isAsking = true;
+    setButtonLoading(queryBtn, true);
+
+    try {
+      const res = await fetch('/api/ask', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question })
+      });
+      if (!res.ok) {
+        const d = await res.json();
+        throw new Error(d.error || 'Query failed');
+      }
+      const data = await res.json();
+      if (data.success) {
+        showResultModal('Resolution Report', data);
+      }
+      input.value = '';
+    } catch (err) {
+      showToast(err.message, 'error');
+      addActivity({
+        type: 'error',
+        title: 'Query Failed',
+        text: err.message,
+        timestamp: new Date().toISOString()
+      });
+    } finally {
+      isAsking = false;
+      setButtonLoading(queryBtn, false);
+    }
+  }
+
+  // ── File Upload ───────────────────────────────────────
+
+  uploadZone.addEventListener('click', (e) => {
+    if (e.target === fileInput) return;
+    fileInput.click();
+  });
+
+  ['dragenter', 'dragover'].forEach((evt) => {
+    uploadZone.addEventListener(evt, (e) => {
+      e.preventDefault();
+      uploadZone.classList.add('drag-over');
+    });
+  });
+
+  ['dragleave', 'drop'].forEach((evt) => {
+    uploadZone.addEventListener(evt, (e) => {
+      e.preventDefault();
+      uploadZone.classList.remove('drag-over');
+    });
+  });
+
+  uploadZone.addEventListener('drop', (e) => {
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      fileInput.files = e.dataTransfer.files;
+      handleFileSelect();
+    }
+  });
+
+  fileInput.addEventListener('change', handleFileSelect);
+
+  function handleFileSelect() {
+    if (fileInput.files.length > 0) {
+      const file = fileInput.files[0];
+      filenameText.textContent = file.name;
+      uploadFilename.classList.add('active');
+      uploadBtn.style.display = 'inline-flex';
+
+      // Motion: spring pop to draw attention
+      if (window.Motion && window.Motion.animate) {
+        window.Motion.animate(
+          uploadBtn,
+          { transform: ['scale(0.92)', 'scale(1.04)', 'scale(1)'] },
+          { duration: 0.4, easing: [0.23, 1, 0.32, 1] }
+        );
+      }
+    }
+  }
+
+  async function uploadFile() {
+    if (isUploading || fileInput.files.length === 0) return;
+    isUploading = true;
+    setButtonLoading(uploadBtn, true);
+    uploadShimmer.classList.add('active');
+
+    const formData = new FormData();
+    formData.append('file', fileInput.files[0]);
+
+    try {
+      const res = await fetch('/api/upload', { method: 'POST', body: formData });
+      if (!res.ok) {
+        const d = await res.json();
+        throw new Error(d.error || 'Upload failed');
+      }
+      fileInput.value = '';
+      uploadFilename.classList.remove('active');
+      uploadBtn.style.display = 'none';
+    } catch (err) {
+      showToast(err.message, 'error');
+      addActivity({
+        type: 'error',
+        title: 'Upload Failed',
+        text: err.message,
+        timestamp: new Date().toISOString()
+      });
+    } finally {
+      isUploading = false;
+      setButtonLoading(uploadBtn, false);
+      uploadShimmer.classList.remove('active');
+    }
+  }
+
+  // ── Button Loading State ──────────────────────────────
+  // Emil: blur(2px) masks imperfect transitions during loading
+
+  function setButtonLoading(btn, loading) {
+    if (loading) {
+      btn.disabled = true;
+      btn.style.filter = 'blur(1.5px)';
+      btn.style.opacity = '0.7';
+    } else {
+      btn.disabled = false;
+      btn.style.filter = '';
+      btn.style.opacity = '';
+    }
+  }
+
+  function resetButtons() {
+    [ingestBtn, queryBtn, uploadBtn].forEach((b) => setButtonLoading(b, false));
+    isIngesting = false;
+    isAsking = false;
+    isUploading = false;
+    uploadShimmer.classList.remove('active');
+  }
+
+  // ── Activity Feed ─────────────────────────────────────
+
+  let activityIndex = 0;
+
+  function addActivity(item) {
+    const emptyState = activityFeed.querySelector('.empty-state');
+    if (emptyState) emptyState.remove();
+
+    const div = document.createElement('div');
+    div.className = `activity-item ${item.type}`;
+    div.style.setProperty('--index', activityIndex++);
+
+    const time = new Date(item.timestamp).toLocaleTimeString();
+    div.innerHTML = `
+      <div class="activity-title">${item.title}</div>
+      <div class="activity-text">${item.text}</div>
+      <span class="activity-time">${time}</span>
     `;
-    
-    modal.classList.add('active');
-}
 
-function showResultModal(title, data) {
-    const body = document.getElementById('modal-body');
-    document.getElementById('modal-title').textContent = title;
-    
-    const questionTokens = data.question_entities?.map(e => 
-        `<span class="token">${e.token}</span>`
-    ).join(', ') || 'None';
-    
+    activityFeed.prepend(div);
+
+    // Keep max 50 items
+    while (activityFeed.children.length > 50) {
+      activityFeed.lastElementChild.remove();
+    }
+  }
+
+  // ── Stats ─────────────────────────────────────────────
+
+  function updateStats() {
+    animateStat('stat-ingested', stats.ingested);
+    animateStat('stat-redacted', stats.redacted);
+    animateStat('stat-queries', stats.queries);
+    animateStat('stat-chunks', stats.chunks);
+  }
+
+  function animateStat(id, targetValue) {
+    const el = $(id);
+    const current = parseInt(el.textContent) || 0;
+
+    if (window.Motion && window.Motion.animate) {
+      // Spring-animated counter
+      window.Motion.animate(current, targetValue, {
+        type: 'spring',
+        stiffness: 100,
+        damping: 20,
+        onUpdate: (v) => { el.textContent = Math.round(v); }
+      });
+      // Subtle scale pop — hardware accelerated
+      window.Motion.animate(
+        el,
+        { transform: ['scale(1)', 'scale(1.15)', 'scale(1)'] },
+        { duration: 0.35, easing: [0.23, 1, 0.32, 1] }
+      );
+    } else {
+      el.textContent = targetValue;
+    }
+  }
+
+  // ── Modal ─────────────────────────────────────────────
+
+  function showResultModal(title, data) {
+    const body = $('modal-body');
+    $('modal-title').textContent = title;
+
+    const questionTokens = data.question_entities
+      ?.map((e) => `<span class="token">${escapeHtml(e.token)}</span>`)
+      .join(', ') || 'None';
+
     body.innerHTML = `
-        <div class="result-section">
-            <h4>Question</h4>
-            <div class="result-box">${escapeHtml(data.original_question)}</div>
+      <div class="result-section">
+        <h4>Original Query</h4>
+        <div class="result-box">${escapeHtml(data.original_question)}</div>
+      </div>
+      <div class="result-section">
+        <h4>LLM Response</h4>
+        <div class="result-box answer">${escapeHtml(data.answer)}</div>
+      </div>
+      <div class="result-section">
+        <h4>Telemetry</h4>
+        <div class="result-box">
+          <p style="margin:0 0 8px"><strong>Intercepted PII:</strong> ${questionTokens}</p>
+          <p style="margin:0 0 8px"><strong>Vector Chunks:</strong> ${JSON.stringify(data.context_chunks)}</p>
+          <p style="margin:0"><strong>Latency:</strong> ${data.processing_time}ms</p>
         </div>
-        <div class="result-section">
-            <h4>Answer</h4>
-            <div class="result-box answer">${escapeHtml(data.answer)}</div>
-        </div>
-        <div class="result-section">
-            <h4>Details</h4>
-            <div class="result-box">
-                <p style="margin: 0 0 12px 0;"><strong>PII in question:</strong> ${questionTokens}</p>
-                <p style="margin: 0 0 12px 0;"><strong>Context chunks:</strong> ${data.context_chunks}</p>
-                <p style="margin: 0;"><strong>Time:</strong> ${data.processing_time}ms</p>
-            </div>
-        </div>
-        <div class="result-section">
-            <h4>Masked Question</h4>
-            <div class="result-box" style="opacity: 0.8;">${escapeHtml(data.masked_question)}</div>
-        </div>
+      </div>
     `;
-    
-    modal.classList.add('active');
-}
 
-function closeModal() {
+    modal.classList.add('active');
+  }
+
+  function closeModal() {
     modal.classList.remove('active');
-}
+  }
 
-function showToast(message, type = 'info') {
-    const container = document.getElementById('toast-container');
+  // Close modal on Escape
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && modal.classList.contains('active')) {
+      closeModal();
+    }
+  });
+
+  // ── Toasts ────────────────────────────────────────────
+  // Emil: CSS @starting-style handles entry animation.
+  // JS only handles lifecycle/removal.
+
+  function showToast(message, type) {
+    type = type || 'info';
+    const container = $('toast-container');
     const toast = document.createElement('div');
     toast.className = `toast ${type}`;
-    
+
     const titles = {
-        success: 'Success',
-        error: 'Error',
-        warning: 'Warning',
-        info: 'Info'
+      success: 'Operation Successful',
+      error: 'System Fault',
+      warning: 'Attention',
+      info: 'Information'
     };
-    
+
     toast.innerHTML = `
-        <div class="toast-title">${titles[type]}</div>
-        <div class="toast-message">${message}</div>
+      <div class="toast-title">${titles[type]}</div>
+      <div class="toast-msg">${escapeHtml(message)}</div>
     `;
-    
+
     container.appendChild(toast);
-    
+
+    // Emil: exit is faster than enter (180ms vs 350ms CSS entry)
     setTimeout(() => {
-        toast.style.opacity = '0';
-        toast.style.transform = 'translateX(40px)';
-        setTimeout(() => toast.remove(), 300);
+      toast.classList.add('leaving');
+      setTimeout(() => toast.remove(), 180);
     }, 4000);
-}
+  }
 
-function escapeHtml(text) {
+  // ── Utility ───────────────────────────────────────────
+
+  function escapeHtml(text) {
     if (!text) return '';
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
-}
+    const d = document.createElement('div');
+    d.textContent = text;
+    return d.innerHTML;
+  }
 
-modal.addEventListener('click', (e) => {
-    if (e.target === modal) closeModal();
-});
+  // ── Perpetual Micro-Interactions (Motion) ─────────────
+  // Isolated from main render. Only transform + opacity.
 
-window.addEventListener('keypress', (e) => {
-    if (e.key === 'Enter' && e.shiftKey === false) {
-        if (document.activeElement.id === 'query-input') {
-            e.preventDefault();
-            askQuestion();
-        }
+  document.addEventListener('DOMContentLoaded', () => {
+    if (!window.Motion || !window.Motion.animate) return;
+
+    // Live dot breathing pulse
+    const liveDot = $('live-dot-animate');
+    if (liveDot) {
+      window.Motion.animate(
+        liveDot,
+        { transform: ['scale(1)', 'scale(1.5)', 'scale(1)'], opacity: [0.5, 1, 0.5] },
+        { duration: 2.2, repeat: Infinity, easing: 'ease-in-out' }
+      );
     }
-});
+
+    // Upload icon gentle float
+    const uploadIcon = $('upload-icon-animate');
+    if (uploadIcon) {
+      window.Motion.animate(
+        uploadIcon,
+        { transform: ['translateY(0px)', 'translateY(-5px)', 'translateY(0px)'] },
+        { duration: 2.8, repeat: Infinity, easing: 'ease-in-out' }
+      );
+    }
+  });
+
+  // ── Keyboard Shortcuts ────────────────────────────────
+  // Emil: no animation on keyboard-initiated actions (they're high-frequency)
+
+  window.addEventListener('keypress', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      if (document.activeElement === $('query-input')) {
+        e.preventDefault();
+        askQuestion();
+      }
+    }
+  });
+
+})();

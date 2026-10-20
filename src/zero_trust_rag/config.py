@@ -1,12 +1,27 @@
 import os
-import yaml
 from pathlib import Path
 from typing import Any
 
-CONFIG_PATH = Path(__file__).parent / "config.yaml"
+import yaml
+
+from .exceptions import ConfigurationError
+
+DEFAULT_CONFIG_PATH = Path(__file__).parent / "config.yaml"
+
+
+def _config_path() -> Path:
+    """The config file to load: ZT_CONFIG_PATH if set, else the packaged config.yaml."""
+    override = os.getenv("ZT_CONFIG_PATH")
+    return Path(override) if override else DEFAULT_CONFIG_PATH
 
 
 class Config:
+    """Read-only access to config.yaml with dotted keys, e.g. config.get("presidio.score_threshold").
+
+    A missing or unreadable file is an error rather than an empty config: silently falling back to
+    defaults would mean a tightened security setting in the wrong file never takes effect.
+    """
+
     _instance = None
     _data: dict[str, Any] = {}
 
@@ -17,22 +32,27 @@ class Config:
         return cls._instance
 
     def _load(self) -> None:
-        if CONFIG_PATH.exists():
-            with open(CONFIG_PATH) as f:
-                self._data = yaml.safe_load(f) or {}
-        else:
-            self._data = {}
+        path = _config_path()
+        if not path.is_file():
+            raise ConfigurationError(f"Config file not found: {path}")
+        with open(path, encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+        if not isinstance(data, dict):
+            raise ConfigurationError(f"Config file is empty or not a mapping: {path}")
+        self._data = data
+
+    @classmethod
+    def reload(cls) -> "Config":
+        """Drop the cached instance and read the file again (used by tests)."""
+        cls._instance = None
+        return cls()
 
     def get(self, key: str, default: Any = None) -> Any:
-        keys = key.split(".")
-        value = self._data
-        for k in keys:
-            if isinstance(value, dict):
-                value = value.get(k)
-                if value is None:
-                    return default
-            else:
+        value: Any = self._data
+        for k in key.split("."):
+            if not isinstance(value, dict) or k not in value:
                 return default
+            value = value[k]
         return value
 
     def __getitem__(self, key: str) -> Any:

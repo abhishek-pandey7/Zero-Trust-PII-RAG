@@ -138,6 +138,13 @@ class PIIVault:
         with self._lock:
             return dict(self._counters)
 
+    def known_values(self) -> list[tuple[str, str]]:
+        """Every (real value, token) pair, for the egress guard's known-value sweep."""
+        with self._lock, self._get_connection() as conn:
+            return [(row["real_value"], row["token"]) for row in conn.execute(
+                "SELECT real_value, token FROM token_mappings"
+            )]
+
     def get_all_mappings(self) -> list[dict]:
         """Get all token mappings with full details for the UI."""
         with self._lock:

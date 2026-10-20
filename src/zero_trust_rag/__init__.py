@@ -6,6 +6,7 @@ A production-ready RAG pipeline that masks PII before sending to external APIs.
 from .exceptions import (
     APIError,
     ConfigurationError,
+    EgressBlockedError,
     RedactionError,
     ValidationError,
     VaultError,
@@ -22,6 +23,7 @@ __all__ = [
     "PIIRedactor",
     "ZeroTrustRAGError",
     "ConfigurationError",
+    "EgressBlockedError",
     "APIError",
     "VaultError",
     "ValidationError",

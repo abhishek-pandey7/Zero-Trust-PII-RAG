@@ -33,13 +33,15 @@ class LLM(Protocol):
 
 class GroqLLM:
     def __init__(self, api_key: str, model: str, temperature: float = 0.0,
-                 timeout: float = 30.0, max_attempts: int = 3):
+                 timeout: float = 30.0, max_attempts: int = 3, reasoning_effort: str | None = None):
         if not api_key:
             raise APIError("Missing Groq API key. Set GROQ_API_KEY.", provider="Groq")
         # The SDK has its own retries; disable them so tenacity is the only retry layer
         self._client = groq.Groq(api_key=api_key, timeout=timeout, max_retries=0)
         self.model = model
         self.temperature = temperature
+        # gpt-oss models think before answering; "low" keeps latency near a non-reasoning model
+        self._extra = {"reasoning_effort": reasoning_effort} if reasoning_effort else {}
         self._call = retry(
             retry=retry_if_exception_type(TRANSIENT_ERRORS),
             stop=stop_after_attempt(max_attempts),
@@ -53,6 +55,7 @@ class GroqLLM:
             model=self.model,
             temperature=self.temperature,
             messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+            **self._extra,
         )
         return response.choices[0].message.content or ""
 

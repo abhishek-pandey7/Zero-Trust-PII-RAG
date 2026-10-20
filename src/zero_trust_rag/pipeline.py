@@ -15,6 +15,7 @@ import chromadb
 
 from .audit_logger import AuditLogger
 from .config import Config
+from .egress import EgressGuard
 from .embeddings import Embedder, LocalEmbedder
 from .exceptions import APIError, RedactionError, ValidationError, ZeroTrustRAGError
 from .llm import LLM, GroqLLM
@@ -80,13 +81,15 @@ class ZeroTrustRAG:
         self.vault = vault or PIIVault()
         self.audit = audit or AuditLogger()
         self.redactor = redactor or PIIRedactor(self.vault, self.audit)
+        self.egress = EgressGuard(self.vault, self.audit)
         self.embedder = embedder or LocalEmbedder()
         self.llm = llm or GroqLLM(
             api_key=groq_api_key or os.getenv("GROQ_API_KEY", ""),
-            model=config.get("llm.model", "llama-3.3-70b-versatile"),
+            model=config.get("llm.model", "openai/gpt-oss-120b"),
             temperature=config.get("llm.temperature", 0),
             timeout=config.get("llm.timeout_seconds", 30),
             max_attempts=config.get("llm.max_attempts", 3),
+            reasoning_effort=config.get("llm.reasoning_effort"),
         )
         self.splitter = TextSplitter(
             chunk_size=config.get("splitter.chunk_size", 500),
@@ -170,6 +173,9 @@ class ZeroTrustRAG:
             raise
 
         masked_q, question_entities = self.redactor.redact(question, "query")
+        # Values the vault already knows ("priya sharma" in lowercase, which NER may miss) become
+        # their tokens too, so retrieval matches the stored chunks and nothing known is sent raw
+        masked_q, _ = self.egress.remask_known_values(masked_q)
         docs = self.retrieve(masked_q)
         if not docs:
             self.audit.log_operation("ask", "no_context", {"pii_in_question": len(question_entities)})
@@ -177,7 +183,8 @@ class ZeroTrustRAG:
             return QueryResult(message, masked_q, message, 0, question_entities)
 
         context = "\n\n---\n\n".join(docs)
-        user_prompt = f"Context:\n{context}\n\nQuestion: {masked_q}"
+        # The guard sees exactly what would be sent, and blocks it if identifiers remain
+        user_prompt = self.egress.enforce(f"Context:\n{context}\n\nQuestion: {masked_q}", "llm_query").text
         try:
             masked_answer = self.llm.complete(SYSTEM_PROMPT, user_prompt)
         except APIError as e:

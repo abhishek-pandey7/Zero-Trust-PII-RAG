@@ -40,6 +40,9 @@ ENTITY_TYPES = config.get("presidio.entity_types", [
 
 SCORE_THRESHOLD = config.get("presidio.score_threshold", 0.4)
 
+# Longest piece of text handed to spaCy at once (see PIIRedactor._blocks)
+BLOCK_CHARS = 4000
+
 # When recognizers claim overlapping text, the label comes from the most specific one. A checksum-
 # or format-backed identifier (SSN, Aadhaar, account number) outranks a name, which outranks the
 # generic NER labels that fire on almost any number or place.
@@ -176,14 +179,36 @@ class PIIRedactor:
         sanitized = re.sub(r'[\x80-\x9f]', '', sanitized)
         return sanitized.strip()
 
+    @staticmethod
+    def _blocks(text: str, max_chars: int = BLOCK_CHARS):
+        """Yield (offset, block) pieces of at most ~max_chars, cut only at line breaks.
+
+        spaCy's memory grows with the length of the document it parses (~100 MB for 25,000
+        characters), so long inputs are analysed a block at a time. Cutting at line breaks can't
+        split an entity we'd keep: _trim already ends every span at its first line break.
+        """
+        start = 0
+        while start < len(text):
+            end = start + max_chars
+            if end < len(text):
+                cut = text.rfind("\n", start, end)
+                end = cut + 1 if cut > start else text.find("\n", end) + 1 or len(text)
+            else:
+                end = len(text)
+            yield start, text[start:end]
+            start = end
+
     def detect(self, text: str) -> list[RecognizerResult]:
         """Find PII spans in already-sanitized text, cleaned up and free of overlaps."""
-        results = self.analyzer.analyze(
-            text=text,
-            entities=ENTITY_TYPES,
-            language="en",
-            score_threshold=SCORE_THRESHOLD,
-        )
+        results: list[RecognizerResult] = []
+        for offset, block in self._blocks(text):
+            for r in self.analyzer.analyze(
+                text=block,
+                entities=ENTITY_TYPES,
+                language="en",
+                score_threshold=SCORE_THRESHOLD,
+            ):
+                results.append(RecognizerResult(r.entity_type, r.start + offset, r.end + offset, r.score))
         cleaned = [r for r in (self._trim(text, r) for r in results) if r is not None]
         return self._merge_overlaps(cleaned)
 

@@ -1,0 +1,11 @@
+venv
+.git
+chroma_store
+vault.db
+audit.log
+*.docx
+employee_records_1000.txt
+prep
+scratch
+__pycache__
+.env

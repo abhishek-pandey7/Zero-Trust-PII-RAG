@@ -13,6 +13,7 @@ from flask_socketio import SocketIO, emit
 
 from src import APIError, EgressBlockedError, ValidationError, ZeroTrustRAG, ZeroTrustRAGError
 from src.zero_trust_rag.config import Config
+from src.zero_trust_rag.utils import validate_input
 
 load_dotenv()
 
@@ -20,11 +21,23 @@ load_dotenv()
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get("SECRET_KEY", "dev-secret-key-change-in-production")
 
+
+def _async_mode() -> str:
+    """'eventlet' only when gunicorn's eventlet worker has monkey-patched the process, else threads.
+
+    Hard-coding eventlet broke any start command that used plain threads, and vice versa.
+    """
+    try:
+        import eventlet.patcher
+        if eventlet.patcher.is_monkey_patched("socket"):
+            return "eventlet"
+    except ImportError:
+        pass
+    return "threading"
+
+
 # SocketIO setup - for real-time updates
-socketio = SocketIO(app,
-    cors_allowed_origins="*",
-    async_mode='threading' if os.getenv('FLASK_ENV') == 'development' else 'eventlet'
-)
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode=_async_mode())
 
 PREVIEW_CHARS = 500
 
@@ -46,6 +59,23 @@ def get_rag() -> ZeroTrustRAG:
     return _rag
 
 
+_warm_up_error: str | None = None
+
+
+def _warm_up() -> None:
+    """Load spaCy and the embedding model at boot, so the first visitor doesn't wait ~20 s."""
+    global _warm_up_error
+    try:
+        get_rag().embedder.embed(["warm up"])
+    except Exception as e:  # reported by /api/health instead of crashing the worker
+        _warm_up_error = f"{type(e).__name__}: {e}"
+        app.logger.exception("Pipeline warm-up failed")
+
+
+if os.getenv("ZT_EAGER_INIT", "1") == "1" and os.getenv("FLASK_ENV") != "testing":
+    threading.Thread(target=_warm_up, name="warm-up", daemon=True).start()
+
+
 def _now() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
@@ -61,6 +91,7 @@ def _error(e: Exception, status: int):
 
 def _ingest(text: str, source: str | None = None) -> dict:
     """Ingest text and report progress over the socket. Redaction runs exactly once."""
+    validate_input(text)  # before loading anything: an oversized upload is refused, not an OOM kill
     bot = get_rag()
     socketio.emit('ingestion_start', {'text_length': len(text), 'source': source, 'timestamp': _now()})
 
@@ -176,6 +207,7 @@ def api_ask():
         return jsonify({'success': False, 'error': 'No question provided'}), 400
 
     try:
+        validate_input(question)
         bot = get_rag()
         socketio.emit('query_processing', {'timestamp': _now()})
         result = bot.ask(question)
@@ -241,8 +273,15 @@ def api_policies():
 
 @app.route('/api/health', methods=['GET'])
 def health_check():
-    """Liveness check."""
-    return jsonify({'status': 'healthy', 'timestamp': _now(), 'rag_initialized': _rag is not None})
+    """Liveness check, plus whether the pipeline has finished loading and which commit is live."""
+    return jsonify({
+        'status': 'healthy',
+        'timestamp': _now(),
+        'rag_initialized': _rag is not None,
+        'warm_up_error': _warm_up_error,
+        'version': (os.getenv('RENDER_GIT_COMMIT') or os.getenv('GIT_COMMIT') or 'dev')[:7],
+        'async_mode': socketio.async_mode,
+    })
 
 
 # WebSocket events

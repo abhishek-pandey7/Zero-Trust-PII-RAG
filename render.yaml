@@ -1,22 +1,24 @@
+# Render free plan: 512 MB RAM, sleeps after 15 minutes idle, disk wiped on every deploy and restart.
 services:
   - type: web
     name: zero-trust-pii-rag
     runtime: python
     plan: free
-    buildCommand: |
-      pip install -r requirements.txt
-      python -m spacy download en_core_web_sm
-    startCommand: gunicorn --worker-class eventlet -w 1 --bind 0.0.0.0:$PORT app:app
+    # The embedding model is fetched at build time so the first request after a deploy doesn't
+    # wait on an 80 MB download
+    buildCommand: pip install -r requirements.txt && python scripts/prefetch_models.py
+    # One process (one copy of the models in memory), threads for concurrency. --timeout covers
+    # the slowest request: a large upload being redacted.
+    startCommand: gunicorn --worker-class gthread --threads 8 --workers 1 --timeout 120 --bind 0.0.0.0:$PORT app:app
+    healthCheckPath: /api/health
+    autoDeploy: true
     envVars:
       - key: PYTHON_VERSION
-        value: 3.11.0
-      - key: FLASK_ENV
-        value: production
+        value: 3.12.7
+      # glibc gives each thread its own malloc arena by default; two keeps memory flat under threads
+      - key: MALLOC_ARENA_MAX
+        value: "2"
       - key: GROQ_API_KEY
-        sync: false
-      - key: HUGGINGFACEHUB_API_TOKEN
         sync: false
       - key: SECRET_KEY
         generateValue: true
-    healthCheckPath: /api/health
-    autoDeploy: true

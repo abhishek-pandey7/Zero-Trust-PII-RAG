@@ -59,6 +59,10 @@ def main() -> None:
     embedder.embed(chunks)
     stage(f"embed {len(chunks)} chunks", t)
 
+    from src.zero_trust_rag.utils import release_free_memory
+    release_free_memory()
+    stage("after malloc_trim", t)
+
 
 if __name__ == "__main__":
     main()

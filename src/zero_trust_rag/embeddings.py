@@ -17,6 +17,9 @@ from typing import Protocol
 
 import numpy as np
 
+# The Rust tokenizer otherwise starts a thread pool with its own buffers; batches here are small
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+
 logger = logging.getLogger(__name__)
 
 # Inside the project by default: on hosts like Render only the project directory survives from the
@@ -54,6 +57,7 @@ class LocalEmbedder:
 
         options = ort.SessionOptions()
         options.enable_cpu_mem_arena = False  # return activation memory after each batch
+        options.enable_mem_pattern = False  # don't pre-plan buffers per input shape; shapes vary
         options.intra_op_num_threads = threads
         options.inter_op_num_threads = 1
         options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL

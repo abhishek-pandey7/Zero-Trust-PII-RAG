@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>What the LLM sees</title>
+<link rel="stylesheet" href="diagram.css">
+<style>
+  .grid { display: grid; grid-template-columns: 1fr 60px 1fr; gap: 0; margin-top: 28px; align-items: stretch; }
+  .row-label { font-size: 15px; font-weight: 700; color: #6b7280; letter-spacing: 0.6px; text-transform: uppercase; margin: 26px 0 10px; }
+  .qa { display: grid; grid-template-columns: 1fr 60px 1fr; }
+  .qa .panel-body { line-height: 1.7; }
+  .field { color: #6b7280; }
+  .legend { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 26px; font-size: 15px; align-items: center; }
+  .legend span.label { color: #6b7280; margin-right: 4px; }
+</style>
+</head>
+<body>
+<div id="canvas">
+  <h1>The LLM answers questions about a client it never sees</h1>
+  <p class="lede">A real run of this project: every identifier is swapped for a token before the text is stored or sent.
+    Tokens are unmasked only inside the app, after the answer comes back.</p>
+
+  <div class="row-label">The document</div>
+  <div class="grid">
+    <div class="panel inside">
+      <div class="panel-head">What you upload &middot; stays inside</div>
+      <div class="panel-body mono">
+        <span class="field">Client Name:</span> <span class="tok person">Margaret Ellison</span><br>
+        <span class="field">DOB:</span> <span class="tok date">03/14/1961</span><br>
+        <span class="field">SSN:</span> <span class="tok ssn">536-22-1874</span><br>
+        <span class="field">Email:</span> <span class="tok email">m.ellison@example.com</span><br>
+        <span class="field">Phone:</span> <span class="tok phone">(415) 555-0142</span><br>
+        <span class="field">Account number:</span> <span class="tok bank">004512339871</span><br>
+        <span class="field">Address:</span> <span class="tok loc">1180 Harbor View Dr, Sausalito, CA 94965</span><br>
+        <span class="field">Advisor:</span> <span class="tok person">Daniel Brooks</span><br>
+        <span class="field">Notes:</span> Wants to roll her 401(k) into an IRA before retiring next year.
+      </div>
+    </div>
+    <div class="arrow">&#10140;</div>
+    <div class="panel outside">
+      <div class="panel-head">What is stored and sent to the LLM</div>
+      <div class="panel-body mono">
+        <span class="field">Client Name:</span> <span class="tok person">&lt;&lt;PERSON_01_f52b&gt;&gt;</span><br>
+        <span class="field">DOB:</span> <span class="tok date">&lt;&lt;DATE_TIME_01_0286&gt;&gt;</span><br>
+        <span class="field">SSN:</span> <span class="tok ssn">&lt;&lt;US_SSN_01_e584&gt;&gt;</span><br>
+        <span class="field">Email:</span> <span class="tok email">&lt;&lt;EMAIL_ADDRESS_01_cfcd&gt;&gt;</span><br>
+        <span class="field">Phone:</span> <span class="tok phone">&lt;&lt;PHONE_NUMBER_01_2d59&gt;&gt;</span><br>
+        <span class="field">Account number:</span> <span class="tok bank">&lt;&lt;US_BANK_NUMBER_01_cbc1&gt;&gt;</span><br>
+        <span class="field">Address:</span> <span class="tok loc">&lt;&lt;LOCATION_01_134a&gt;&gt;</span><br>
+        <span class="field">Advisor:</span> <span class="tok person">&lt;&lt;PERSON_02_804d&gt;&gt;</span><br>
+        <span class="field">Notes:</span> Wants to roll her 401(k) into an IRA before retiring next year.
+      </div>
+    </div>
+  </div>
+
+  <div class="row-label">The question and the answer</div>
+  <div class="qa">
+    <div class="panel inside">
+      <div class="panel-head">You ask &middot; you get</div>
+      <div class="panel-body">
+        What is <span class="tok person">Margaret Ellison</span>'s account number, and who is her advisor?
+        <div style="height:14px"></div>
+        Account number: <span class="tok bank">004512339871</span><br>
+        Advisor: <span class="tok person">Daniel Brooks</span>
+      </div>
+    </div>
+    <div class="arrow">&#8644;</div>
+    <div class="panel outside">
+      <div class="panel-head">The LLM is asked &middot; it replies</div>
+      <div class="panel-body">
+        What is <span class="tok person mono">&lt;&lt;PERSON_01_f52b&gt;&gt;</span>'s account number, and who is her advisor?
+        <div style="height:14px"></div>
+        Account number: <span class="tok bank mono">&lt;&lt;US_BANK_NUMBER_01_cbc1&gt;&gt;</span><br>
+        Advisor: <span class="tok person mono">&lt;&lt;PERSON_02_804d&gt;&gt;</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="legend">
+    <span class="label">Colour = kind of value:</span>
+    <span class="tok person">Person</span><span class="tok date">Date of birth</span><span class="tok ssn">SSN</span>
+    <span class="tok email">Email</span><span class="tok phone">Phone</span><span class="tok bank">Bank account</span>
+    <span class="tok loc">Address</span>
+  </div>
+</div>
+</body>
+</html>

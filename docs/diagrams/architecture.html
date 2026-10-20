@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Architecture</title>
+<link rel="stylesheet" href="diagram.css">
+<style>
+  .layout { display: grid; grid-template-columns: 1fr 64px 196px; gap: 0; margin-top: 28px; align-items: stretch; position: relative; }
+  .gap { position: relative; }
+  .crossing { position: absolute; top: 326px; left: -6px; width: 76px; text-align: center; color: #dc2626; }
+  .crossing .arrows { font-size: 30px; line-height: 1; font-weight: 700; }
+  .crossing .lbl { font-size: 12.5px; font-weight: 700; letter-spacing: 0.4px; line-height: 1.25; margin-top: 4px; }
+  .boundary {
+    border: 3px dashed #16a34a; border-radius: 18px; background: #f7fdf9; padding: 18px 22px 22px;
+  }
+  .boundary-title { font-size: 16px; font-weight: 800; letter-spacing: 0.8px; color: #15803d; }
+  .boundary-sub { font-size: 15px; color: #166534; margin-top: 2px; }
+
+  .lane { margin-top: 18px; }
+  .lane-name { font-size: 14px; font-weight: 700; letter-spacing: 0.7px; text-transform: uppercase; color: #6b7280; margin-bottom: 8px; }
+  .steps { display: flex; align-items: stretch; gap: 0; }
+  .step {
+    flex: 1; background: #fff; border: 2px solid #9ca3af; border-radius: 12px; padding: 12px 12px 13px;
+    min-height: 112px;
+  }
+  .step b { display: block; font-size: 17px; margin-bottom: 5px; }
+  .step span { display: block; font-size: 14.5px; color: #4b5563; line-height: 1.35; }
+  .link { width: 30px; display: flex; align-items: center; justify-content: center; font-size: 22px; color: #6b7280; }
+
+  .redact { border-color: #ea580c; background: #fff7ed; } .redact b { color: #9a3412; }
+  .store  { border-color: #2563eb; background: #eff6ff; } .store b  { color: #1e3a8a; }
+  .guard  { border-color: #dc2626; background: #fef2f2; } .guard b  { color: #991b1b; }
+
+  .stores { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; margin-top: 20px; }
+  .stores .step { min-height: 0; }
+
+  .llm {
+    border: 3px solid #dc2626; border-radius: 18px; background: #fff; padding: 20px 18px;
+    display: flex; flex-direction: column; justify-content: center; text-align: center;
+  }
+  .llm .tag { font-size: 14px; font-weight: 800; letter-spacing: 1px; color: #dc2626; }
+  .llm b { font-size: 22px; margin: 8px 0 4px; display: block; }
+  .llm span { font-size: 15px; color: #4b5563; line-height: 1.45; }
+  .wire {
+    margin-top: 16px; font-size: 14.5px; color: #991b1b; border-top: 2px solid #fecaca; padding-top: 12px; line-height: 1.5;
+  }
+</style>
+</head>
+<body>
+<div id="canvas">
+  <h1>Architecture: one process, one way out</h1>
+  <p class="lede">Detection, tokenizing, chunking, embedding and storage all run inside the app. The only thing that leaves
+    is a prompt made of tokens, and it passes the egress guard first.</p>
+
+  <div class="layout">
+    <div class="boundary">
+      <div class="boundary-title">TRUST BOUNDARY</div>
+      <div class="boundary-sub">raw PII exists only in here, and only in the vault once a request finishes</div>
+
+      <div class="lane">
+        <div class="lane-name">Ingest a document</div>
+        <div class="steps">
+          <div class="step"><b>Upload</b><span>text, PDF or Word, through the Flask API</span></div>
+          <div class="link">&#10140;</div>
+          <div class="step redact"><b>Detect &amp; tokenize</b><span>Presidio + spaCy, format patterns, labelled fields</span></div>
+          <div class="link">&#10140;</div>
+          <div class="step"><b>Chunk</b><span>500 chars, never splits a token</span></div>
+          <div class="link">&#10140;</div>
+          <div class="step"><b>Embed locally</b><span>MiniLM on ONNX Runtime, no API call</span></div>
+          <div class="link">&#10140;</div>
+          <div class="step store"><b>Store</b><span>masked chunks in ChromaDB</span></div>
+        </div>
+      </div>
+
+      <div class="lane">
+        <div class="lane-name">Ask a question</div>
+        <div class="steps">
+          <div class="step"><b>Question</b><span>may name clients, accounts, SSNs</span></div>
+          <div class="link">&#10140;</div>
+          <div class="step redact"><b>Tokenize</b><span>same rules, same tokens as the documents</span></div>
+          <div class="link">&#10140;</div>
+          <div class="step"><b>Retrieve</b><span>nearest masked chunks</span></div>
+          <div class="link">&#10140;</div>
+          <div class="step guard"><b>Egress guard</b><span>re-masks known values; blocks any SSN, card, email, phone left</span></div>
+          <div class="link">&#10140;</div>
+          <div class="step store"><b>Unmask reply</b><span>LLM answers in tokens; values filled in from the vault</span></div>
+        </div>
+      </div>
+
+      <div class="stores">
+        <div class="step store"><b>PII vault &middot; SQLite</b><span>value &#8596; token, one token per value, forever</span></div>
+        <div class="step store"><b>Vector index &middot; ChromaDB</b><span>masked chunks and their embeddings only</span></div>
+        <div class="step"><b>Audit log &middot; JSON lines</b><span>every redaction and egress; types and tokens, never values</span></div>
+      </div>
+    </div>
+
+    <div class="gap"><div class="crossing"><div class="arrows">&#8652;</div><div class="lbl">prompt<br>&amp; reply</div></div></div>
+
+    <div class="llm">
+      <div class="tag">OUTSIDE</div>
+      <b>Groq LLM</b>
+      <span>openai/gpt-oss-120b</span>
+      <div class="wire">&#8592; receives a prompt of tokens<br>&#8594; answers in tokens<br><br>never sees a name, number or address</div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

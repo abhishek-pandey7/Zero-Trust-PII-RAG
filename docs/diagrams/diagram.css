@@ -1,0 +1,43 @@
+/* Shared styles for the README diagrams. Rendered to PNG by scripts/render_diagrams.py. */
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: #ffffff;
+  font-family: "Segoe UI", "Inter", "Helvetica Neue", Arial, sans-serif;
+  color: #111827;
+  -webkit-font-smoothing: antialiased;
+}
+
+#canvas { width: 1200px; padding: 40px 44px 44px; background: #ffffff; }
+
+h1 { font-size: 30px; font-weight: 700; letter-spacing: -0.3px; }
+.lede { font-size: 18px; color: #4b5563; margin-top: 8px; line-height: 1.45; }
+
+.mono { font-family: "Cascadia Mono", "Consolas", "SFMono-Regular", Menlo, monospace; }
+
+/* Entity chips: one colour per kind of value, used for both the value and its token */
+.tok { border-radius: 5px; padding: 1px 6px; font-weight: 600; white-space: nowrap; }
+.person { background: #dbeafe; color: #1e40af; }
+.ssn    { background: #fee2e2; color: #991b1b; }
+.email  { background: #ede9fe; color: #5b21b6; }
+.phone  { background: #ccfbf1; color: #115e59; }
+.bank   { background: #fef3c7; color: #92400e; }
+.loc    { background: #dcfce7; color: #166534; }
+.date   { background: #fce7f3; color: #9d174d; }
+
+.panel {
+  border: 2px solid #d1d5db; border-radius: 14px; background: #ffffff; overflow: hidden;
+}
+.panel-head {
+  font-size: 15px; font-weight: 700; letter-spacing: 0.6px; text-transform: uppercase;
+  padding: 12px 18px; border-bottom: 2px solid #e5e7eb; background: #f9fafb; color: #374151;
+}
+.panel-body { padding: 16px 18px; font-size: 16.5px; line-height: 1.9; }
+
+.inside  { border-color: #16a34a; }
+.inside .panel-head  { background: #f0fdf4; color: #166534; border-bottom-color: #bbf7d0; }
+.outside { border-color: #dc2626; }
+.outside .panel-head { background: #fef2f2; color: #991b1b; border-bottom-color: #fecaca; }
+
+.arrow { font-size: 34px; color: #6b7280; display: flex; align-items: center; justify-content: center; }
+.note { font-size: 15px; color: #6b7280; }

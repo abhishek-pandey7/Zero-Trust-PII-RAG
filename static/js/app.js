@@ -74,9 +74,12 @@
   });
 
   socket.on('pii_detected', (data) => {
-    const entityList = data.entities
-      .map((e) => `<span class="token">${escapeHtml(e.original_value)}</span>`)
-      .join(', ');
+    // Values never travel over the socket; summarise by type instead
+    const counts = {};
+    data.entities.forEach((e) => { counts[e.entity_type] = (counts[e.entity_type] || 0) + 1; });
+    const entityList = Object.entries(counts)
+      .map(([type, n]) => `<span class="token">${escapeHtml(type)} &times;${n}</span>`)
+      .join(' ');
     addActivity({
       type: 'info',
       title: 'PII Intercepted',
@@ -228,9 +231,10 @@
           
           let details = '';
           if (log.details) {
-            details = `<div class="audit-details">${JSON.stringify(log.details)}</div>`;
+            details = `<div class="audit-details">${escapeHtml(JSON.stringify(log.details))}</div>`;
           } else if (log.token) {
-            details = `<div class="audit-token">Token: <code>${log.token}</code></div>`;
+            // Tokens look like <<PERSON_01_ab12>>, which the browser would parse as a tag unless escaped
+            details = `<div class="audit-token">${escapeHtml(log.entity_type || '')} &rarr; <code>${escapeHtml(log.token)}</code></div>`;
           }
 
           return `
@@ -240,7 +244,6 @@
                 <span class="audit-time">${new Date(log.timestamp).toLocaleString()}</span>
               </div>
               <div class="audit-body">
-                ${log.text_preview ? `<div class="audit-preview">"${escapeHtml(log.text_preview)}..."</div>` : ''}
                 ${log.status === 'error' ? `<div class="audit-msg error">${escapeHtml(log.details.error || 'Unknown error')}</div>` : ''}
                 ${details}
               </div>
@@ -265,21 +268,21 @@
         container.innerHTML = `
           <div class="policy-group">
             <h5>LLM Provider (Groq)</h5>
-            <div class="policy-item"><span>Model</span> <strong>${p.llm.model}</strong></div>
-            <div class="policy-item"><span>Temperature</span> <strong>${p.llm.temperature}</strong></div>
+            <div class="policy-item"><span>Model</span> <strong>${escapeHtml(String(p.llm.model))}</strong></div>
+            <div class="policy-item"><span>Temperature</span> <strong>${escapeHtml(String(p.llm.temperature))}</strong></div>
           </div>
           <div class="policy-group">
             <h5>Embedding Engine (HuggingFace)</h5>
-            <div class="policy-item"><span>Model</span> <strong>${p.embeddings.model}</strong></div>
+            <div class="policy-item"><span>Model</span> <strong>${escapeHtml(String(p.embeddings.model))}</strong></div>
           </div>
           <div class="policy-group">
             <h5>Redaction Heuristics (Presidio)</h5>
-            <div class="policy-item"><span>Confidence Threshold</span> <strong>${p.security.score_threshold}</strong></div>
+            <div class="policy-item"><span>Confidence Threshold</span> <strong>${escapeHtml(String(p.security.score_threshold))}</strong></div>
           </div>
           <div class="policy-group">
             <h5>Storage Persistence</h5>
-            <div class="policy-item"><span>Vault DB</span> <code>${p.security.vault_path}</code></div>
-            <div class="policy-item"><span>Audit Log</span> <code>${p.security.audit_path}</code></div>
+            <div class="policy-item"><span>Vault DB</span> <code>${escapeHtml(String(p.security.vault_path))}</code></div>
+            <div class="policy-item"><span>Audit Log</span> <code>${escapeHtml(String(p.security.audit_path))}</code></div>
           </div>
         `;
       }
@@ -306,11 +309,12 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ data: text })
       });
+      const d = await res.json();
       if (!res.ok) {
-        const d = await res.json();
         throw new Error(d.error || 'Ingestion failed');
       }
       textarea.value = '';
+      showIngestModal(d);
     } catch (err) {
       showToast(err.message, 'error');
       addActivity({
@@ -533,6 +537,7 @@
 
   function showResultModal(title, data) {
     const body = $('modal-body');
+    body.parentElement.classList.remove('wide');
     $('modal-title').textContent = title;
 
     const questionTokens = data.question_entities
@@ -541,23 +546,61 @@
 
     body.innerHTML = `
       <div class="result-section">
-        <h4>Original Query</h4>
+        <h4>You asked</h4>
         <div class="result-box">${escapeHtml(data.original_question)}</div>
       </div>
+      <div class="result-section boundary-out">
+        <h4>Sent to the LLM</h4>
+        <div class="result-box mono">${highlightTokens(data.masked_question)}</div>
+      </div>
+      <div class="result-section boundary-out">
+        <h4>The LLM replied</h4>
+        <div class="result-box mono">${highlightTokens(data.masked_answer || '')}</div>
+      </div>
       <div class="result-section">
-        <h4>LLM Response</h4>
+        <h4>You see (unmasked locally)</h4>
         <div class="result-box answer">${escapeHtml(data.answer)}</div>
       </div>
       <div class="result-section">
         <h4>Telemetry</h4>
         <div class="result-box">
           <p style="margin:0 0 8px"><strong>Intercepted PII:</strong> ${questionTokens}</p>
-          <p style="margin:0 0 8px"><strong>Vector Chunks:</strong> ${JSON.stringify(data.context_chunks)}</p>
+          <p style="margin:0 0 8px"><strong>Chunks retrieved:</strong> ${escapeHtml(String(data.context_chunks))}</p>
           <p style="margin:0"><strong>Latency:</strong> ${data.processing_time}ms</p>
         </div>
       </div>
     `;
 
+    modal.classList.add('active');
+  }
+
+  // Wraps <<TOKEN>> placeholders in chips; everything else is escaped first
+  function highlightTokens(text) {
+    return escapeHtml(text).replace(/&lt;&lt;[A-Z_]+_\d{2,}_[0-9a-f]{4}&gt;&gt;/g,
+      (t) => `<span class="token">${t}</span>`);
+  }
+
+  function showIngestModal(data) {
+    const body = $('modal-body');
+    $('modal-title').textContent = 'Ingestion Report';
+    body.parentElement.classList.add('wide');
+    body.innerHTML = `
+      <div class="side-by-side">
+        <div class="result-section">
+          <h4>Original (stays in this app)</h4>
+          <div class="result-box mono pre">${escapeHtml(data.original_text)}</div>
+        </div>
+        <div class="result-section boundary-out">
+          <h4>Stored and searchable (tokens only)</h4>
+          <div class="result-box mono pre">${highlightTokens(data.masked_text)}</div>
+        </div>
+      </div>
+      <div class="result-section">
+        <div class="result-box">
+          <strong>${data.pii_redacted}</strong> values tokenized &middot; <strong>${data.chunks_created}</strong> chunks stored
+        </div>
+      </div>
+    `;
     modal.classList.add('active');
   }
 

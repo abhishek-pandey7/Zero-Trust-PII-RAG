@@ -1,11 +1,11 @@
 """
 audit_logger.py – Compliance audit logging for Zero-Trust RAG.
 """
-import logging
 import json
+import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+
 from .config import Config
 
 config = Config()
@@ -17,7 +17,7 @@ class AuditLogger:
     Outputs JSON lines for easy parsing by SIEM tools.
     """
 
-    def __init__(self, log_path: Optional[str] = None):
+    def __init__(self, log_path: str | None = None):
         self._log_path = log_path or config.get("security.audit_log_path", "./audit.log")
         self._logger = logging.getLogger("audit")
         self._logger.setLevel(logging.INFO)
@@ -40,7 +40,7 @@ class AuditLogger:
         self._logger.info(json.dumps(event))
 
     def log_operation(self, event_type: str, status: str, 
-                    details: Optional[dict] = None) -> None:
+                    details: dict | None = None) -> None:
         event = {
             "timestamp": datetime.utcnow().isoformat() + "Z",
             "event_type": event_type,
@@ -65,7 +65,7 @@ class AuditLogger:
             if not Path(self._log_path).exists():
                 return []
             
-            with open(self._log_path, 'r', encoding='utf-8') as f:
+            with open(self._log_path, encoding='utf-8') as f:
                 # Read all lines and take the last N
                 lines = f.readlines()
                 for line in reversed(lines[-limit:]):

@@ -4,15 +4,15 @@ pii_redactor.py – Uses Microsoft Presidio to detect and mask PII entities.
 This module provides PII detection and redaction with configurable
 entity types and audit logging.
 """
-import re
 import logging
-from typing import Optional, List
-from presidio_analyzer import AnalyzerEngine, RecognizerResult, PatternRecognizer, Pattern
+import re
+
+from presidio_analyzer import AnalyzerEngine, Pattern, PatternRecognizer, RecognizerResult
 from presidio_analyzer.nlp_engine import NlpEngineProvider
 
-from .vault import PIIVault
 from .audit_logger import AuditLogger
 from .config import Config
+from .vault import PIIVault
 
 config = Config()
 logger = logging.getLogger(__name__)
@@ -89,7 +89,7 @@ class PIIRedactor:
     Supports audit logging for compliance.
     """
 
-    def __init__(self, vault: PIIVault, audit_logger: Optional[AuditLogger] = None):
+    def __init__(self, vault: PIIVault, audit_logger: AuditLogger | None = None):
         self.vault = vault
         self.audit = audit_logger or AuditLogger()
         
@@ -188,7 +188,7 @@ class PIIRedactor:
         logger.info(f"Redacted {len(log)} PII entities ({event_type})")
         return safe_text, log
 
-    def _remove_overlaps(self, results: List[RecognizerResult]) -> List[RecognizerResult]:
+    def _remove_overlaps(self, results: list[RecognizerResult]) -> list[RecognizerResult]:
         """Remove overlapping results, keeping the highest scoring ones."""
         if not results:
             return []

@@ -8,13 +8,29 @@ This module provides a complete RAG pipeline with:
 - Audit logging for compliance
 - Configurable parameters via config.yaml
 """
-import os
 import hashlib
-import shutil
 import logging
-from typing import Optional
+import os
+import shutil
+
 import requests as _requests
+from langchain_community.vectorstores import Chroma
 from langchain_core.embeddings import Embeddings
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_groq import ChatGroq
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+from .audit_logger import AuditLogger
+from .config import Config
+from .exceptions import APIError, RedactionError, ValidationError, ZeroTrustRAGError
+from .pii_redactor import PIIRedactor
+from .utils import (
+    retry_on_api_error,
+    validate_api_key,
+    validate_input,
+)
+from .vault import PIIVault
 
 
 class _HFApiEmbeddings(Embeddings):
@@ -95,27 +111,6 @@ class _HFApiEmbeddings(Embeddings):
     def embed_query(self, text: str) -> list:
         return self._embed([text])[0]
 
-from langchain_groq import ChatGroq
-from langchain_community.vectorstores import Chroma
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import StrOutputParser
-
-from .vault import PIIVault
-from .pii_redactor import PIIRedactor
-from .audit_logger import AuditLogger
-from .config import Config
-from .utils import (
-    validate_api_key,
-    validate_input,
-    retry_on_api_error,
-)
-from .exceptions import (
-    APIError,
-    ValidationError,
-    RedactionError,
-    ZeroTrustRAGError
-)
 
 logger = logging.getLogger(__name__)
 config = Config()
@@ -134,9 +129,9 @@ class ZeroTrustRAG:
 
     def __init__(
         self,
-        groq_api_key: Optional[str] = None,
-        hf_api_key: Optional[str] = None,
-        persist_directory: Optional[str] = None
+        groq_api_key: str | None = None,
+        hf_api_key: str | None = None,
+        persist_directory: str | None = None
     ):
         self._init_security()
         self._init_components(groq_api_key, hf_api_key, persist_directory)
@@ -151,9 +146,9 @@ class ZeroTrustRAG:
 
     def _init_components(
         self,
-        groq_api_key: Optional[str],
-        hf_api_key: Optional[str],
-        persist_directory: Optional[str]
+        groq_api_key: str | None,
+        hf_api_key: str | None,
+        persist_directory: str | None
     ) -> None:
         """Initialize LLM and embedding components."""
         groq_api_key = groq_api_key or os.getenv("GROQ_API_KEY")
@@ -297,7 +292,7 @@ class ZeroTrustRAG:
                     "question": masked_q
                 })
             except Exception as e:
-                raise APIError(f"LLM inference failed: {e}", provider="Groq")
+                raise APIError(f"LLM inference failed: {e}", provider="Groq") from e
 
             final_answer = self.redactor.unmask(masked_answer)
             

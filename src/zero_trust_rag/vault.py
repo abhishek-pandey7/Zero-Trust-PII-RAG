@@ -4,12 +4,10 @@ vault.py – Thread-safe PII vault with SQLite persistence for Zero-Trust RAG.
 This module provides secure storage and resolution of PII tokens.
 Data is persisted to SQLite for resume capability after restarts.
 """
+import logging
 import sqlite3
 import threading
 import uuid
-import logging
-from pathlib import Path
-from typing import Optional
 from contextlib import contextmanager
 
 from .config import Config
@@ -24,7 +22,7 @@ class PIIVault:
     Supports SQLite persistence for resume capability after restarts.
     """
 
-    def __init__(self, db_path: Optional[str] = None):
+    def __init__(self, db_path: str | None = None):
         self._lock = threading.Lock()
         self._db_path = db_path or config.get("security.vault_db_path", "./vault.db")
         self._counters: dict[str, int] = {}
@@ -103,7 +101,7 @@ class PIIVault:
                 logger.info(f"Stored PII token: {token} for {entity_type}")
                 return token
 
-    def resolve(self, token: str) -> Optional[str]:
+    def resolve(self, token: str) -> str | None:
         with self._lock:
             with self._get_connection() as conn:
                 cursor = conn.execute(

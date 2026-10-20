@@ -3,6 +3,7 @@ demo.py – Interactive showcase for the Zero-Trust PII-Redacting RAG Pipeline.
 """
 import os
 import sys
+
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -34,7 +35,7 @@ print("\n[+] API keys loaded successfully")
 
 # Import after checking keys
 try:
-    from src import ZeroTrustRAG, ZeroTrustRAGError, ValidationError, APIError
+    from src import APIError, ZeroTrustRAG, ZeroTrustRAGError
     print("[+] Modules imported successfully")
 except ImportError as e:
     print(f"[!] Failed to import modules: {e}")
@@ -140,7 +141,7 @@ print("FINAL STATISTICS")
 print("=" * 70)
 
 stats = bot.get_stats()
-print(f"Vault contents:")
+print("Vault contents:")
 for entity_type, count in stats.get('vault_stats', {}).items():
     print(f"    - {entity_type}: {count} tokens stored")
 print(f"Storage location: {stats.get('persist_directory', 'N/A')}")

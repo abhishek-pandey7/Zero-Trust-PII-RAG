@@ -37,3 +37,9 @@ def test_oversized_input_is_refused_with_a_clear_message(client, monkeypatch):
     response = client.post("/api/ask", json={"question": "x" * 60})
     assert response.status_code == 400
     assert "accepts up to 50" in response.get_json()["error"]
+
+
+def test_previews_never_end_inside_a_token():
+    text = "x" * 1190 + "<<US_BANK_NUMBER_01_6b63>> and more"
+    assert web._preview(text) == "x" * 1190 + "..."
+    assert web._preview("short") == "short"

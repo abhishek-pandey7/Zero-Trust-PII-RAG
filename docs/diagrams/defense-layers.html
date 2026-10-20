@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Defence in depth</title>
+<link rel="stylesheet" href="diagram.css">
+<style>
+  .layers { margin-top: 26px; display: flex; flex-direction: column; gap: 12px; }
+  .layer { display: grid; grid-template-columns: 54px 290px 1fr; border: 2px solid #d1d5db; border-radius: 14px; overflow: hidden; background: #fff; }
+  .num { display: flex; align-items: center; justify-content: center; font-size: 24px; font-weight: 800; color: #fff; }
+  .what { padding: 14px 16px; border-right: 2px solid #f3f4f6; }
+  .what b { font-size: 18px; display: block; }
+  .what span { font-size: 14.5px; color: #4b5563; display: block; margin-top: 4px; line-height: 1.4; }
+  .example { padding: 14px 18px; font-size: 15.5px; line-height: 1.6; color: #1f2937; }
+  .example .k { font-size: 12.5px; font-weight: 700; letter-spacing: 0.6px; color: #6b7280; text-transform: uppercase; display: block; margin-bottom: 2px; }
+  .l1 .num { background: #ea580c; } .l2 .num { background: #d97706; } .l3 .num { background: #2563eb; }
+  .l4 .num { background: #dc2626; } .l5 .num { background: #4b5563; }
+  .residual { margin-top: 18px; border: 2px dashed #9ca3af; border-radius: 14px; padding: 14px 18px; font-size: 15.5px; line-height: 1.55; color: #374151; background: #f9fafb; }
+  .residual b { color: #111827; }
+  .code { font-family: "Cascadia Mono", Consolas, monospace; font-size: 14.5px; background: #f3f4f6; border-radius: 5px; padding: 1px 6px; }
+</style>
+</head>
+<body>
+<div id="canvas">
+  <h1>Five layers between a client's data and the LLM</h1>
+  <p class="lede">Detection models miss things, so no single layer is trusted on its own. Every example below is a real case
+    from this project's tests or demo runs.</p>
+
+  <div class="layers">
+    <div class="layer l1">
+      <div class="num">1</div>
+      <div class="what"><b>Detect</b><span>Presidio + spaCy NER, format patterns with context words, labelled fields</span></div>
+      <div class="example"><span class="k">Catches</span>
+        <span class="code">Name: Amit Sharma</span> &#8212; spaCy's small model missed it; the <span class="code">Name:</span> label rule didn't.
+        An unformatted SSN counts only with a word like "social security" nearby.</div>
+    </div>
+    <div class="layer l2">
+      <div class="num">2</div>
+      <div class="what"><b>Merge overlaps</b><span>two recognizers disagree on a span &#8594; mask the union, keep the most specific label</span></div>
+      <div class="example"><span class="k">Catches</span>
+        A date match starting one character before an Aadhaar number. Keeping just one span used to leave the other's
+        tail in clear text; the label is now the identifier, not <span class="code">DATE_TIME</span>.</div>
+    </div>
+    <div class="layer l3">
+      <div class="num">3</div>
+      <div class="what"><b>Known-value sweep</b><span>any value the vault already holds is re-tokenized before sending</span></div>
+      <div class="example"><span class="k">Catches</span>
+        <span class="code">what is priya sharma's ssn?</span> &#8212; NER misses the lowercase name in the question, but it was
+        tokenized at ingest, so the sweep sends <span class="code">&lt;&lt;PERSON_01_..&gt;&gt;</span>.</div>
+    </div>
+    <div class="layer l4">
+      <div class="num">4</div>
+      <div class="what"><b>Block hard identifiers</b><span>SSN, Luhn-valid card, Aadhaar, PAN, email or phone left outside a token</span></div>
+      <div class="example"><span class="k">Catches</span>
+        An SSN in the prompt with redaction switched off entirely (a test does exactly this): the request is
+        refused with HTTP 422 and <b>nothing is sent</b>.</div>
+    </div>
+    <div class="layer l5">
+      <div class="num">5</div>
+      <div class="what"><b>Audit</b><span>every redaction and every egress, allowed or blocked</span></div>
+      <div class="example"><span class="k">Records</span>
+        Entity types, tokens and counts only. An earlier version logged a 50-character preview that still held
+        unreplaced PII; a test now asserts no detected value ever reaches the log.</div>
+    </div>
+  </div>
+
+  <div class="residual"><b>What still gets through:</b> a value nobody has seen before, with no recognisable shape, that NER misses
+    at ingest and again in the question (an unusual name in free text, say). No automated system can promise zero; this one
+    narrows it to that case and records every request that leaves.</div>
+</div>
+</body>
+</html>

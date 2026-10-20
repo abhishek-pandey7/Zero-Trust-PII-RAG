@@ -1,205 +1,158 @@
-# Zero-Trust PII RAG Pipeline
+# Zero-Trust PII RAG
 
-A production-ready RAG (Retrieval-Augmented Generation) pipeline that strictly masks PII (Personally Identifiable Information) before sending any data to external Application Programming Interfaces (APIs). External Large Language Models (LLMs) only see masked placeholders such as `<<PERSON_01_A1B2>>`. All unmasking happens exclusively within your secure local environment.
+Ask an LLM questions about documents full of client data, without the LLM ever seeing the client.
 
-## Table of Contents
-1. [Security Model](#security-model)
-2. [Architecture Overview](#architecture-overview)
-3. [Dashboard Features](#dashboard-features)
-4. [Component Breakdown](#component-breakdown)
-5. [Installation and Setup](#installation-and-setup)
-6. [Configuration Parameters](#configuration-parameters)
-7. [Supported PII Types](#supported-pii-types)
-8. [Process Lifecycles](#process-lifecycles)
-9. [Usage Instructions](#usage-instructions)
-10. [Audit Logging](#audit-logging)
+Every name, SSN, account number, address and date of birth is swapped for an opaque token before the
+text is stored, embedded or sent anywhere. The LLM reads and answers in tokens; the real values are
+put back only inside the app, after the answer returns.
 
----
+[![CI](https://github.com/abhishek-pandey7/Zero-Trust-PII-RAG/actions/workflows/ci.yml/badge.svg)](https://github.com/abhishek-pandey7/Zero-Trust-PII-RAG/actions/workflows/ci.yml)
+&nbsp;**Live demo:** [zero-trust-pii-rag.onrender.com](https://zero-trust-pii-rag.onrender.com) (free tier: the first visit after a quiet spell takes up to a minute to wake)
 
-## Security Model
+![A real run: the client record and question on the left stay inside the app; the right shows exactly what is stored and sent to the LLM, with every identifier replaced by a token](docs/images/before-after.png)
 
-The Zero-Trust framework ensures that sensitive data is completely isolated from third-party services. The core tenets are:
+## Why
 
-1. **Pre-Transmission Redaction**: All text is analyzed and redacted locally before it ever reaches an external network boundary.
-2. **Opaque Tokenization**: Detected PII is mapped to cryptographic, irreversible tokens (e.g., `<<EMAIL_ADDRESS_04_b1c4>>`) rather than being encrypted or hashed directly into the text.
-3. **Local Unmasking Protocol**: When the LLM generates a response using the opaque tokens, the system translates these tokens back into plaintext locally just prior to returning the result to the end-user.
-4. **Comprehensive Audit Logs**: Every ingestion, redaction, unmasking, and lookup operation is recorded locally in a JSON-formatted format for strict compliance and monitoring.
+Firms that hold client data (brokerages, banks, insurers, HR) want LLMs to answer questions over their
+records, but sending a client's SSN or account number to a third-party model provider is exactly what
+privacy rules like GLBA, GDPR and India's DPDP Act are written to stop. Masking with `[REDACTED]`
+doesn't work either: the model can no longer tell one client from another, so it can't answer.
 
-## Architecture Overview
+This project keeps the meaning and removes the identity. `Margaret Ellison` becomes
+`<<PERSON_01_f52b>>` everywhere it appears, in every document and every question, so the LLM can still
+reason ("the advisor for `<<PERSON_01_f52b>>` is `<<PERSON_02_804d>>`") without knowing who anyone is.
 
-```text
-User Input (Containing Plaintext PII)
-       |
-       v
-+---------------------------------------------------+
-|  pii_redactor.py                                  |
-|  - NLP processing via Microsoft Presidio          |
-|  - Strict newline truncation for entity bounds    |
-|  - Input sanitization (control characters)        |
-|  - Token replacement                              |
-+---------------------------------------------------+
-       |
-       v
-+---------------------------------------------------+
-|  vault.py                                         |
-|  - SQLite persistence layer                       |
-|  - One-to-one Token <-> PII mapping               |
-|  - Thread-safe synchronization                    |
-+---------------------------------------------------+
-       |
-       v
-[Masked Text - Safe for Transmission]
-       |
-       v
-+---------------------------------------------------+
-|  Local Embeddings Function                        |
-|  (HuggingFace MiniLM executed locally)            |
-+---------------------------------------------------+
-       |
-       v
-+---------------------------------------------------+
-|  ChromaDB / Vector Database                       |
-|  (Local persistent storage of embedded chunks)    |
-+---------------------------------------------------+
-       |
-       v
-User Query (Containing Plaintext PII)
-       |
-       v
-+---------------------------------------------------+
-|  Query Redaction -> Context Retrieval -> Groq LLM |
-|  (LLM operates purely on semantic tokens)         |
-+---------------------------------------------------+
-       |
-       v
-[Masked Output from LLM]
-       |
-       v
-+---------------------------------------------------+
-|  vault.unmask_text()                              |
-|  (Reverse lookup and restoration)                 |
-+---------------------------------------------------+
-       |
-       v
-Final Answer (Unmasked Plaintext)
-```
+## How it works
 
-## Dashboard Features
+![Architecture: upload, detect and tokenize, chunk, embed locally and store all happen inside the trust boundary; questions are tokenized, matched against stored chunks and pass an egress guard; the only thing that leaves is a prompt of tokens to the Groq LLM](docs/images/architecture.png)
 
-The system includes a modern, responsive web interface built with a custom design system for real-time visualization and management:
+- **One way out.** Detection, tokenizing, chunking, embedding (MiniLM on ONNX Runtime) and storage all
+  run in-process. The only network call carrying document content is the LLM prompt, and it is made
+  of tokens.
+- **Deterministic tokens.** The vault maps each value to one token, forever, so retrieval and the
+  LLM's reasoning both work across documents.
+- **Unmasking is local.** Tokens in the LLM's reply are resolved against the vault in the app. The
+  reply is parsed tolerantly, so a token echoed without its angle brackets still resolves.
 
-- **Pipeline View**: Real-time monitoring of document ingestion, PII detection, and RAG querying. Visualizes masked vs. unmasked text transitions.
-- **Vault Explorer**: A secure administrative view of all token-to-PII mappings stored in the local SQLite database.
-- **Compliance Audit Log**: Live stream of system operations and redaction events parsed from the JSON audit trail.
-- **Security Policies**: Read-only introspection of the active system configuration, including LLM parameters, embedding models, and confidence thresholds.
-- **Large-Scale Support**: Validated for documents exceeding 1,000,000 characters (e.g., bulk employee records).
+### Five layers, because detection models miss things
 
-## Component Breakdown
+![Five layers: detect, merge overlaps, known-value sweep, block hard identifiers, audit; each with a real example of what it catches, and a note on what still gets through](docs/images/defense-layers.png)
 
-- `src/zero_trust_rag/pipeline.py`: Orchestrator class (`ZeroTrustRAG`) managing text splitting, vector storage, and Langchain integration.
-- `src/zero_trust_rag/pii_redactor.py`: Implements `PIIRedactor` using `presidio-analyzer`. Features strict bound detection to prevent PII leakage across newline boundaries.
-- `src/zero_trust_rag/vault.py`: Implements `PIIVault`, providing thread-safe SQLite persistence for deterministic token mapping.
-- `src/zero_trust_rag/audit_logger.py`: Structured JSON logging for all security-relevant operations.
-- `src/zero_trust_rag/utils.py`: Input validation, API key verification, and error handling decorators.
-- `app.py`: Flask-SocketIO server presenting the reactive UI and WebSocket stream.
+The egress guard is the important one. It runs on the exact text about to be sent: any value the vault
+already knows is re-tokenized, and anything still shaped like an SSN, card number, Aadhaar, PAN, email
+or phone number blocks the request outright. A test switches redaction off entirely and checks that an
+ingested SSN still never reaches the LLM.
 
-## Installation and Setup
+## Screenshots
 
-### Prerequisites
-- Python 3.9 or higher
-- Git
+| Ask a question | Ingest a document |
+| --- | --- |
+| ![The answer dialog: the question as asked, the question as sent to the LLM in tokens, the LLM's reply in tokens, and the unmasked answer](docs/images/ui-answer.png) | ![The ingestion report: the original client records on the left, the stored tokenized text on the right](docs/images/ui-ingest.png) |
+| **Pipeline and live log** | **Audit log** |
+| ![The main dashboard with the live system log summarising detected entities by type](docs/images/ui-dashboard.png) | ![The audit log listing ask, egress, ingest and redaction events with entity types and tokens only](docs/images/ui-audit.png) |
 
-### Deployment Steps
+## What it detects
 
-1. **Create Virtual Environment**
-   ```bash
-   python -m venv venv
-   ```
+18 entity types, from Microsoft Presidio's recognizers, spaCy NER and recognizers written for this project:
 
-2. **Activate the Environment**
-   - Windows:
-     ```bash
-     venv\Scripts\activate
-     ```
-   - Linux / macOS:
-     ```bash
-     source venv/bin/activate
-     ```
+| Kind | Entity types |
+| --- | --- |
+| People and places | `PERSON`, `LOCATION`, `NRP` (nationality, religion, politics), `DATE_TIME` (dates with digits only) |
+| US financial and government IDs | `US_SSN`, `US_ITIN`, `US_BANK_NUMBER`, `CREDIT_CARD`, `IBAN_CODE`, `US_PASSPORT`, `US_DRIVER_LICENSE` |
+| Indian IDs | `IN_AADHAAR`, `IN_PAN`, Indian mobile numbers |
+| Contact and network | `EMAIL_ADDRESS`, `PHONE_NUMBER`, `URL`, `IP_ADDRESS`, `MEDICAL_LICENSE` |
 
-3. **Install Dependencies**
-   ```bash
-   pip install -r requirements.txt
-   ```
+Two rules matter more than the list:
 
-4. **Environment Variables**
-   Create a `.env` file at the root directory containing the following:
-   ```env
-   GROQ_API_KEY=your_groq_api_key_here
-   HUGGINGFACEHUB_API_TOKEN=your_hf_token_here
-   FLASK_ENV=development
-   ```
+- **Labelled fields.** In structured records, a value after `Name:`, `Client:`, `Account Holder:`,
+  `Advisor:`, `Address:` or `DOB:` is treated as PII whatever NER thinks. spaCy's small model missed
+  `Name: Amit Sharma`; this rule doesn't.
+- **Recall first.** When recognizers overlap, the union is masked. A weak pattern (a bare 9-digit
+  number) counts when a context word like "social security" is nearby. An unmasked character is a
+  leak; an over-masked one only costs some answer quality.
 
-## Configuration Parameters
+## Measured
 
-All pipeline settings are centralized within `config.yaml`.
+| | |
+| --- | --- |
+| Tests | **81**, run in CI on every pull request |
+| Security property under test | no detected value in stored chunks, in the audit log, or in anything sent to the LLM |
+| Redaction switched off entirely | the egress guard still blocks the SSN; the LLM is never called |
+| Memory | **414 MB peak of 512 MB**, booting the real image and ingesting 100 records under a hard limit (CI job `memory-budget`) |
+| Embeddings | computed locally; vectors match ChromaDB's reference implementation to 7e-8 |
 
-### Configuration Sections
+## Run it
 
-- **llm**: Define provider (`groq`), model selection (e.g., `llama-3.3-70b-versatile`), and temperature.
-- **embeddings**: Model selection for vector encoding.
-- **chroma**: Persistent storage directory for embeddings.
-- **splitter**: Parameters for `RecursiveCharacterTextSplitter`.
-- **presidio**: Active recognizers and confidence thresholds (default: `0.6`).
-- **security**: Database paths and audit log locations.
+Needs Python 3.12 and a free [Groq API key](https://console.groq.com/).
 
-## Supported PII Types
-
-The default configuration intercepts a wide array of entities via SpaCy NER and custom regex recognizers:
-
-- PERSON, EMAIL_ADDRESS, PHONE_NUMBER
-- US_SSN, CREDIT_CARD, IBAN_CODE
-- IP_ADDRESS, URL, LOCATION, DATE_TIME
-- IN_PAN (Indian PAN Card), IN_AADHAAR (Indian Aadhaar Number)
-- US_PASSPORT, US_DRIVER_LICENSE, MEDICAL_LICENSE
-
-## Process Lifecycles
-
-### The Ingestion Lifecycle
-1. **Input Validation**: Enforces length constraints (up to 1,000,000 characters).
-2. **Strict Bound Redaction**: Analyzes PII bounds and truncates at newlines to prevent cross-line contamination.
-3. **Vault Storage**: Assigns unique cryptographic tokens for each unique PII value.
-4. **Vector Alignment**: Stores masked chunks in ChromaDB via local embedding.
-
-### The Querying Lifecycle
-1. **Query Redaction**: Identifies PII in the user prompt and applies existing or new tokens.
-2. **Semantic Retrieval**: Fetches relevant masked chunks from the local vector database.
-3. **Remote Inference**: Sends masked context and query to the LLM endpoint (e.g., Groq).
-4. **Local Restoration**: Resolves response tokens using the private Vault and returns the unmasked answer.
-
-## Usage Instructions
-
-### Web Interface
-To run the interactive dashboard:
 ```bash
-python app.py
-```
-Navigate to `http://localhost:5000`.
+python -m venv venv && venv/bin/activate          # Windows: venv\Scripts\activate
+pip install -r requirements-dev.txt
+echo "GROQ_API_KEY=your_key" > .env
 
-### Direct API Usage
-```python
-from src import ZeroTrustRAG
-import os
-
-rag = ZeroTrustRAG(groq_api_key=os.getenv("GROQ_API_KEY"))
-rag.ingest("Employee John Doe (Aadhaar: 1234-5678-9012) joined today.")
-answer = rag.ask("What is John Doe's Aadhaar?")
-print(answer)
+FLASK_ENV=development python app.py               # http://localhost:5000
+python demo.py                                    # command-line walkthrough
+pytest                                            # 81 tests
 ```
 
-## Audit Logging
+The first start downloads the embedding model (80 MB) into `./models`. Synthetic data to try:
+`python scripts/generate_records.py --count 20`.
 
-Operations are recorded in `audit.log` as sequential JSON lines for SIEM integration:
-```json
-{"timestamp": "2026-05-15T21:00:00Z", "event_type": "redaction", "entity_type": "PERSON", "token": "<<PERSON_01_A1B2>>", "action": "mask"}
+With Docker, matching the hosted setup:
+
+```bash
+docker build -t zero-trust-rag .
+docker run -p 5000:5000 -e GROQ_API_KEY=your_key -m 512m zero-trust-rag
 ```
 
+## Deploy
+
+`render.yaml` describes the Render service: one gunicorn process with 8 threads, the embedding model
+fetched at build time, and `ZT_MAX_INPUT_CHARS=30000` so an oversized upload gets a clear 400 instead of
+running a 512 MB instance out of memory. Set `GROQ_API_KEY` in the Render dashboard. `/api/health`
+reports the deployed commit and whether the models have loaded.
+
+## API
+
+| Method | Path | Does |
+| --- | --- | --- |
+| `POST` | `/api/ingest` | `{"data": "..."}`: tokenize, chunk, embed and store text |
+| `POST` | `/api/upload` | multipart `file` (.txt, .pdf, .docx): same as ingest |
+| `POST` | `/api/ask` | `{"question": "..."}`: returns the answer plus `masked_question` and `masked_answer`, i.e. exactly what crossed the boundary |
+| `GET` | `/api/audit` | recent audit events (types, tokens and counts only) |
+| `GET` | `/api/policies` | the active model, threshold and entity list |
+| `GET` | `/api/stats` | token counts per entity type, chunks stored |
+| `GET` | `/api/health` | liveness, model status, deployed commit |
+
+A blocked request returns `422` with the entity types that would have leaked.
+
+## Layout
+
+```
+app.py                      Flask API, Socket.IO events, web UI
+src/zero_trust_rag/
+  pii_redactor.py           detection, labelled fields, overlap merging, tokenizing
+  vault.py                  value <-> token store (SQLite), tolerant unmasking
+  egress.py                 known-value sweep and hard-identifier block before the LLM
+  embeddings.py             MiniLM on ONNX Runtime, memory-tuned
+  pipeline.py               ingest and ask
+  llm.py                    Groq client with jittered retries
+  splitter.py               chunking that never cuts a token
+  audit_logger.py           JSON-lines audit trail
+scripts/                    record generator, memory profile, diagram and screenshot renderers
+docs/diagrams/              HTML sources for the diagrams above (python scripts/render_diagrams.py)
+prep/                       interview notes on the design
+```
+
+## Known limitations
+
+- **One shared vault on the demo.** Everyone using the hosted demo shares one vault and one index, and
+  the Vault page shows real values without a login. Use synthetic data only. Per-browser workspaces are
+  on the `feat/workspace-isolation` branch.
+- **Values are stored in plaintext** in the SQLite vault. Encrypting them, with a separate key per
+  workspace so erasing a workspace can be done by deleting its key, is next.
+- **spaCy's small model** misses some names in free text and sometimes tags all-caps headings as
+  places. The labelled-field rule and the egress guard cover the common cases; an unusual name in
+  free text that is never labelled anywhere can still get through.
+- **Hosted limits.** Render's free tier sleeps when idle, wipes its disk on restart, and accepts up to
+  30,000 characters per request.

@@ -801,3 +801,13 @@ textarea:focus {
   .stats-card { grid-template-columns: repeat(2, 1fr); }
   .stat:nth-child(2)::after { display: none; }
 }
+
+/* What crossed the trust boundary, set apart from what stayed inside */
+.result-section.boundary-out .result-box { border-left: 3px solid #ef4444; }
+.result-box.mono { font-family: "Cascadia Mono", Consolas, "SFMono-Regular", Menlo, monospace; font-size: 0.85rem; }
+.result-box.pre { white-space: pre-wrap; }
+.result-box.answer, .result-box.mono { white-space: pre-wrap; }
+.modal-content { max-height: 88vh; overflow-y: auto; }
+.modal-content.wide { max-width: 1080px; }
+.side-by-side { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+@media (max-width: 760px) { .side-by-side { grid-template-columns: 1fr; } }

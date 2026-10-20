@@ -49,7 +49,7 @@ class LocalEmbedder:
 
     dimensions = 384
 
-    def __init__(self, batch_size: int = 16, threads: int = 2):
+    def __init__(self, batch_size: int = 8, threads: int = 2):
         import onnxruntime as ort
         from tokenizers import Tokenizer
 

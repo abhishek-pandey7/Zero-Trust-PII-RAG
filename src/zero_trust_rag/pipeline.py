@@ -21,7 +21,7 @@ from .exceptions import APIError, RedactionError, ValidationError, ZeroTrustRAGE
 from .llm import LLM, GroqLLM
 from .pii_redactor import PIIRedactor
 from .splitter import TextSplitter
-from .utils import validate_input
+from .utils import release_free_memory, validate_input
 from .vault import PIIVault
 
 logger = logging.getLogger(__name__)
@@ -143,6 +143,8 @@ class ZeroTrustRAG:
         except Exception as e:
             self.audit.log_operation("ingest", "error", {"error": type(e).__name__})
             raise RedactionError(f"Ingestion failed: {e}") from e
+        finally:
+            release_free_memory()
 
         self.audit.log_operation("ingest", "success", {
             "chunks_created": len(chunks),

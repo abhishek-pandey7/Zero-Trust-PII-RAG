@@ -158,3 +158,25 @@ def test_unbalanced_brackets_stay_outside_the_token(redactor):
     assert masked.endswith(").")
     assert "(" in masked and "+91" not in masked
     assert "+91-98700-12345" in [e["original_value"] for e in log]
+
+
+def test_long_text_is_analysed_in_blocks_cut_at_line_breaks(redactor):
+    from src.zero_trust_rag.pii_redactor import PIIRedactor
+
+    text = "\n".join(f"Name: Person{i:04d} Example\nSSN: 536-22-{1000 + i}" for i in range(400))
+    blocks = list(PIIRedactor._blocks(text, max_chars=500))
+    assert "".join(b for _, b in blocks) == text
+    assert all(len(b) <= 500 for _, b in blocks)
+    assert all(b.endswith("\n") for _, b in blocks[:-1])
+    assert all(text[o:o + len(b)] == b for o, b in blocks)
+
+
+def test_blocking_finds_the_same_values_as_one_pass(redactor, monkeypatch):
+    import src.zero_trust_rag.pii_redactor as module
+
+    record = RECORD + "\n" + RECORD.replace("Priya Sharma", "Rohan Mehra")
+    whole = [(r.entity_type, r.start, r.end) for r in redactor.detect(record)]
+    monkeypatch.setattr(module, "BLOCK_CHARS", 120)
+    monkeypatch.setattr(module.PIIRedactor._blocks, "__defaults__", (120,))
+    blocked = [(r.entity_type, r.start, r.end) for r in redactor.detect(record)]
+    assert blocked == whole

@@ -25,3 +25,16 @@ def validate_input(text: str, max_length: int | None = None) -> None:
             f"Input is {len(text):,} characters; this deployment accepts up to {limit:,} at a time. "
             "Split the document and ingest it in parts."
         )
+
+
+def release_free_memory() -> None:
+    """Hand memory freed by a large request back to the OS (glibc only; a no-op elsewhere).
+
+    glibc keeps freed heap pages for reuse, so after one big ingest the process stays at its peak
+    size. On a 512 MB host that leftover is the headroom the next request needs.
+    """
+    try:
+        import ctypes
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except (OSError, AttributeError):
+        pass

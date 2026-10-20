@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 from flask import Flask, jsonify, render_template, request
 from flask_socketio import SocketIO, emit
 
-from src import APIError, ValidationError, ZeroTrustRAG, ZeroTrustRAGError
+from src import APIError, EgressBlockedError, ValidationError, ZeroTrustRAG, ZeroTrustRAGError
 from src.zero_trust_rag.config import Config
 
 load_dotenv()
@@ -182,6 +182,8 @@ def api_ask():
         socketio.emit('query_complete', {'timestamp': _now()})
     except ValidationError as e:
         return _error(e, 400)
+    except EgressBlockedError as e:
+        return _error(e, 422)
     except APIError as e:
         return _error(e, 503)
     except ZeroTrustRAGError as e:

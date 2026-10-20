@@ -2,9 +2,11 @@
 app.py – Flask web application with WebSocket support for real-time PII protection.
 """
 import os
+import sys
 import tempfile
 import threading
 import time
+import traceback
 from datetime import UTC, datetime
 
 from dotenv import load_dotenv
@@ -82,6 +84,15 @@ def _warm_up_pipeline() -> None:
             app.logger.exception("Pipeline warm-up attempt %d failed", attempt)
             time.sleep(10 * 2 ** (attempt - 1))
     _warm_up["state"] = "failed"
+
+
+def _warm_up_stack() -> list[str]:
+    """Where the warm-up thread is right now: file, line and function only, never variable values."""
+    for thread in threading.enumerate():
+        if thread.name == "warm-up" and thread.ident in sys._current_frames():
+            frames = traceback.extract_stack(sys._current_frames()[thread.ident])
+            return [f"{f.filename.rsplit('site-packages/', 1)[-1]}:{f.lineno} {f.name}" for f in frames[-12:]]
+    return []
 
 
 def _rss_mb() -> int | None:
@@ -313,6 +324,7 @@ def health_check():
         'memory_mb': _rss_mb(),
         'version': (os.getenv('RENDER_GIT_COMMIT') or os.getenv('GIT_COMMIT') or 'dev')[:7],
         'async_mode': socketio.async_mode,
+        **({'warm_up_stack': _warm_up_stack()} if request.args.get('trace') else {}),
     })
 
 

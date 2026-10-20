@@ -18,11 +18,11 @@ class NoOpRedactor:
     def __init__(self, vault):
         self.vault = vault
 
-    def redact(self, text, event_type="ingest"):
+    def redact(self, text, event_type="ingest", workspace="default"):
         return text.strip(), []
 
-    def unmask(self, text):
-        return self.vault.unmask_text(text)
+    def unmask(self, text, workspace="default"):
+        return self.vault.unmask_text(text, workspace)
 
 
 @pytest.mark.parametrize("leak, entity", [

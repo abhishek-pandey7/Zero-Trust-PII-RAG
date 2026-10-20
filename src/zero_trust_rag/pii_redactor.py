@@ -14,7 +14,7 @@ from presidio_analyzer.nlp_engine import NlpEngineProvider
 
 from .audit_logger import AuditLogger
 from .config import Config
-from .vault import PIIVault
+from .vault import DEFAULT_WORKSPACE, PIIVault
 
 config = Config()
 logger = logging.getLogger(__name__)
@@ -238,7 +238,8 @@ class PIIRedactor:
                 merged.append(r)
         return merged
 
-    def redact(self, text: str, event_type: str = "ingest") -> tuple[str, list[dict]]:
+    def redact(self, text: str, event_type: str = "ingest",
+               workspace: str = DEFAULT_WORKSPACE) -> tuple[str, list[dict]]:
         sanitized = self.sanitize_input(text)
         if not sanitized:
             return text, []
@@ -251,7 +252,7 @@ class PIIRedactor:
         cursor = 0
         for span in spans:
             real_value = sanitized[span.start:span.end]
-            token = self.vault.store(span.entity_type, real_value)
+            token = self.vault.store(span.entity_type, real_value, workspace)
             pieces.append(sanitized[cursor:span.start])
             pieces.append(token)
             cursor = span.end
@@ -261,13 +262,10 @@ class PIIRedactor:
         # Audit after masking is complete and record only tokens: the audit trail must never hold
         # the values it exists to protect
         for entry in log:
-            self.audit.log_redaction(event_type, entry["entity_type"], entry["token"])
+            self.audit.log_redaction(event_type, entry["entity_type"], entry["token"], workspace=workspace)
 
         logger.info("Redacted %d PII entities (%s)", len(log), event_type)
         return "".join(pieces), log
 
-    def redact_batch(self, texts: list[str], event_type: str = "batch") -> list[tuple[str, list[dict]]]:
-        return [self.redact(text, event_type) for text in texts]
-
-    def unmask(self, text: str) -> str:
-        return self.vault.unmask_text(text)
+    def unmask(self, text: str, workspace: str = DEFAULT_WORKSPACE) -> str:
+        return self.vault.unmask_text(text, workspace)

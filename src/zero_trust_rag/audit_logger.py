@@ -22,8 +22,8 @@ class AuditLogger:
     Structured audit logger for PII redaction events.
     Outputs JSON lines for easy parsing by SIEM tools.
 
-    Each instance appends to its own file. (It used to share one logging.Logger, so every
-    instance after the first silently wrote to the first instance's file.)
+    Each instance appends to its own file. Events never contain the values being protected: only
+    entity types, tokens, counts and the workspace they belong to.
     """
 
     def __init__(self, log_path: str | None = None):
@@ -31,46 +31,57 @@ class AuditLogger:
         self._lock = threading.Lock()
 
     def _write(self, event: dict) -> None:
-        line = json.dumps(event)
+        line = json.dumps({"timestamp": _utc_now(), **event})
         with self._lock, open(self._log_path, "a", encoding="utf-8") as f:
             f.write(line + "\n")
 
-    def log_redaction(self, event_type: str, entity_type: str, token: str, action: str = "mask") -> None:
+    def log_redaction(self, event_type: str, entity_type: str, token: str, action: str = "mask",
+                      workspace: str | None = None) -> None:
         """Record that a value was tokenized. Only the token is logged, never the value or its text."""
         self._write({
-            "timestamp": _utc_now(),
             "event_type": event_type,
+            "workspace": workspace,
             "entity_type": entity_type,
             "token": token,
             "action": action,
         })
 
-    def log_operation(self, event_type: str, status: str, details: dict | None = None) -> None:
+    def log_operation(self, event_type: str, status: str, details: dict | None = None,
+                      workspace: str | None = None) -> None:
         self._write({
-            "timestamp": _utc_now(),
             "event_type": event_type,
+            "workspace": workspace,
             "status": status,
             "details": details or {},
         })
 
-    def log_access(self, operation: str, pii_accessed: bool = False) -> None:
+    def log_access(self, operation: str, pii_accessed: bool = False, details: dict | None = None,
+                   workspace: str | None = None) -> None:
+        """Record a read of protected data, such as revealing a vault value."""
         self._write({
-            "timestamp": _utc_now(),
             "event_type": "access",
+            "workspace": workspace,
             "operation": operation,
             "pii_accessed": pii_accessed,
+            "details": details or {},
         })
 
-    def get_recent_logs(self, limit: int = 50) -> list[dict]:
-        """Read recent logs from the file for the UI, newest first."""
+    def get_recent_logs(self, limit: int = 50, workspace: str | None = None) -> list[dict]:
+        """Recent events for the UI, newest first. With a workspace, only that workspace's events."""
         if not self._log_path.exists():
             return []
         with self._lock, open(self._log_path, encoding="utf-8") as f:
             lines = f.readlines()
         logs = []
-        for line in reversed(lines[-limit:]):
+        for line in reversed(lines):
             try:
-                logs.append(json.loads(line))
+                event = json.loads(line)
             except json.JSONDecodeError:
                 logger.warning("Skipping malformed audit log line")
+                continue
+            if workspace is not None and event.get("workspace") != workspace:
+                continue
+            logs.append(event)
+            if len(logs) == limit:
+                break
         return logs

@@ -22,7 +22,7 @@ from .llm import LLM, GroqLLM
 from .pii_redactor import PIIRedactor
 from .splitter import TextSplitter
 from .utils import validate_input
-from .vault import PIIVault
+from .vault import DEFAULT_WORKSPACE, PIIVault
 
 logger = logging.getLogger(__name__)
 config = Config()
@@ -112,12 +112,16 @@ class ZeroTrustRAG:
             configuration={"hnsw": {"space": "cosine"}},
         )
 
-    @staticmethod
-    def _stable_id(text: str) -> str:
-        """Content-derived ID, so re-ingesting the same chunk overwrites rather than duplicates it."""
-        return hashlib.sha256(text.encode("utf-8")).hexdigest()[:32]
 
-    def ingest(self, text_content: str) -> IngestResult:
+    @staticmethod
+    def _stable_id(workspace: str, text: str) -> str:
+        """Content-derived ID, so re-ingesting the same chunk overwrites rather than duplicates it."""
+        return hashlib.sha256(f"{workspace}\x00{text}".encode()).hexdigest()[:32]
+
+    def _chunk_count(self, workspace: str) -> int:
+        return len(self.collection.get(where={"workspace": workspace}, include=[])["ids"])
+
+    def ingest(self, text_content: str, workspace: str = DEFAULT_WORKSPACE) -> IngestResult:
         """
         Ingest text content into the RAG pipeline.
 
@@ -126,41 +130,46 @@ class ZeroTrustRAG:
         try:
             validate_input(text_content)
         except ValidationError as e:
-            self.audit.log_operation("ingest", "error", {"error": str(e)})
+            self.audit.log_operation("ingest", "error", {"error": str(e)}, workspace=workspace)
             raise
 
+        self.vault.touch(workspace)
         try:
-            masked_text, redaction_log = self.redactor.redact(text_content, "ingest")
+            masked_text, redaction_log = self.redactor.redact(text_content, "ingest", workspace)
             chunks = self.splitter.split_text(masked_text)
             if chunks:
                 self.collection.upsert(
-                    ids=[self._stable_id(c) for c in chunks],
+                    ids=[self._stable_id(workspace, c) for c in chunks],
                     documents=chunks,
                     embeddings=self.embedder.embed(chunks),
+                    metadatas=[{"workspace": workspace}] * len(chunks),
                 )
         except ZeroTrustRAGError:
             raise
         except Exception as e:
-            self.audit.log_operation("ingest", "error", {"error": type(e).__name__})
+            self.audit.log_operation("ingest", "error", {"error": type(e).__name__}, workspace=workspace)
             raise RedactionError(f"Ingestion failed: {e}") from e
 
         self.audit.log_operation("ingest", "success", {
             "chunks_created": len(chunks),
             "pii_redacted": len(redaction_log),
-        })
+        }, workspace=workspace)
         logger.info("Ingested %d chunks, redacted %d PII entities", len(chunks), len(redaction_log))
         return IngestResult(len(chunks), len(redaction_log), masked_text, redaction_log)
 
-    def retrieve(self, masked_question: str) -> list[str]:
-        if self.collection.count() == 0:
+    def retrieve(self, masked_question: str, workspace: str = DEFAULT_WORKSPACE) -> list[str]:
+        """The workspace's chunks closest to the question. Other workspaces' chunks are never candidates."""
+        available = self._chunk_count(workspace)
+        if available == 0:
             return []
         hits = self.collection.query(
             query_embeddings=self.embedder.embed([masked_question]),
-            n_results=min(self.top_k, self.collection.count()),
+            n_results=min(self.top_k, available),
+            where={"workspace": workspace},
         )
         return hits["documents"][0]
 
-    def ask(self, question: str) -> QueryResult:
+    def ask(self, question: str, workspace: str = DEFAULT_WORKSPACE) -> QueryResult:
         """
         Ask a question using the RAG pipeline.
 
@@ -169,45 +178,65 @@ class ZeroTrustRAG:
         try:
             validate_input(question)
         except ValidationError as e:
-            self.audit.log_operation("ask", "error", {"error": str(e)})
+            self.audit.log_operation("ask", "error", {"error": str(e)}, workspace=workspace)
             raise
 
-        masked_q, question_entities = self.redactor.redact(question, "query")
+        self.vault.touch(workspace)
+        masked_q, question_entities = self.redactor.redact(question, "query", workspace)
         # Values the vault already knows ("priya sharma" in lowercase, which NER may miss) become
         # their tokens too, so retrieval matches the stored chunks and nothing known is sent raw
-        masked_q, _ = self.egress.remask_known_values(masked_q)
-        docs = self.retrieve(masked_q)
+        masked_q, _ = self.egress.remask_known_values(masked_q, workspace)
+        docs = self.retrieve(masked_q, workspace)
         if not docs:
-            self.audit.log_operation("ask", "no_context", {"pii_in_question": len(question_entities)})
+            self.audit.log_operation("ask", "no_context", {"pii_in_question": len(question_entities)},
+                                     workspace=workspace)
             message = "I don't have any documents to answer from yet. Ingest some data first."
             return QueryResult(message, masked_q, message, 0, question_entities)
 
         context = "\n\n---\n\n".join(docs)
         # The guard sees exactly what would be sent, and blocks it if identifiers remain
-        user_prompt = self.egress.enforce(f"Context:\n{context}\n\nQuestion: {masked_q}", "llm_query").text
+        user_prompt = self.egress.enforce(
+            f"Context:\n{context}\n\nQuestion: {masked_q}", "llm_query", workspace
+        ).text
         try:
             masked_answer = self.llm.complete(SYSTEM_PROMPT, user_prompt)
         except APIError as e:
-            self.audit.log_operation("ask", "error", {"error": str(e)})
+            self.audit.log_operation("ask", "error", {"error": str(e)}, workspace=workspace)
             raise
 
-        answer = self.redactor.unmask(masked_answer)
+        answer = self.redactor.unmask(masked_answer, workspace)
         self.audit.log_operation("ask", "success", {
             "pii_in_question": len(question_entities),
             "context_chunks": len(docs),
-        })
+        }, workspace=workspace)
         logger.info("Query processed: %d PII masked, %d chunks retrieved", len(question_entities), len(docs))
         return QueryResult(answer, masked_q, masked_answer, len(docs), question_entities)
 
-    def get_stats(self) -> dict:
+    def get_stats(self, workspace: str = DEFAULT_WORKSPACE) -> dict:
         """Get pipeline statistics."""
         return {
-            "vault_stats": self.vault.get_stats(),
-            "chunks_stored": self.collection.count(),
-            "persist_directory": self._persist_directory,
+            "vault_stats": self.vault.get_stats(workspace),
+            "chunks_stored": self._chunk_count(workspace),
         }
 
+    def delete_workspace(self, workspace: str) -> dict:
+        """Erase a workspace: its vault values and its stored chunks. The audit trail is kept."""
+        chunks = self._chunk_count(workspace)
+        self.collection.delete(where={"workspace": workspace})
+        values = self.vault.delete_workspace(workspace)
+        self.audit.log_operation("workspace_erased", "success", {
+            "values_deleted": values, "chunks_deleted": chunks,
+        }, workspace=workspace)
+        return {"values_deleted": values, "chunks_deleted": chunks}
+
+    def purge_idle_workspaces(self, idle_hours: float) -> int:
+        """Erase every workspace unused for idle_hours. Returns how many were erased."""
+        stale = self.vault.stale_workspaces(idle_hours)
+        for workspace in stale:
+            self.delete_workspace(workspace)
+        return len(stale)
+
     def reset_vector_db(self) -> None:
-        """Delete every stored chunk (used before evaluation runs for a clean slate)."""
+        """Delete every stored chunk in every workspace (used before evaluation runs)."""
         self._client.delete_collection(COLLECTION)
         self._init_vector_db()

@@ -14,16 +14,19 @@ model missed). That's the residual risk, and why the audit trail records every e
 """
 import logging
 import re
+from collections import OrderedDict
 from dataclasses import dataclass
 
 from .audit_logger import AuditLogger
 from .exceptions import EgressBlockedError
-from .vault import TOKEN_PATTERN, PIIVault
+from .vault import DEFAULT_WORKSPACE, TOKEN_PATTERN, PIIVault
 
 logger = logging.getLogger(__name__)
 
 # Values this short ("Rao", "UK") would match ordinary words; they are left to the redactor
 MIN_SWEEP_LENGTH = 4
+# Sweep patterns kept in memory, least recently used evicted first
+MAX_CACHED_SWEEPS = 256
 
 
 def _luhn_valid(digits: str) -> bool:
@@ -57,23 +60,27 @@ class EgressGuard:
     def __init__(self, vault: PIIVault, audit: AuditLogger):
         self.vault = vault
         self.audit = audit
-        self._sweep_version = -1
-        self._sweep_pattern: re.Pattern | None = None
-        self._sweep_tokens: dict[str, str] = {}
+        # workspace -> (vault size when built, pattern, lowercased value -> token)
+        self._sweeps: OrderedDict[str, tuple[int, re.Pattern | None, dict[str, str]]] = OrderedDict()
 
-    def _sweep(self) -> tuple[re.Pattern | None, dict[str, str]]:
-        """A regex over every known value, rebuilt only when the vault has grown."""
-        version = sum(self.vault.get_stats().values())
-        if version != self._sweep_version:
-            pairs = [(v, t) for v, t in self.vault.known_values() if len(v) >= MIN_SWEEP_LENGTH]
+    def _sweep(self, workspace: str) -> tuple[re.Pattern | None, dict[str, str]]:
+        """A regex over every value the workspace's vault holds, rebuilt only when it has grown."""
+        version = sum(self.vault.get_stats(workspace).values())
+        cached = self._sweeps.get(workspace)
+        if cached is None or cached[0] != version:
+            pairs = [(v, t) for v, t in self.vault.known_values(workspace) if len(v) >= MIN_SWEEP_LENGTH]
             pairs.sort(key=lambda p: len(p[0]), reverse=True)  # longest first: "Priya Sharma" before "Priya"
-            self._sweep_tokens = {v.lower(): t for v, t in pairs}
-            self._sweep_pattern = (
+            tokens = {v.lower(): t for v, t in pairs}
+            pattern = (
                 re.compile(r"(?<!\w)(?:" + "|".join(re.escape(v) for v, _ in pairs) + r")(?!\w)", re.IGNORECASE)
                 if pairs else None
             )
-            self._sweep_version = version
-        return self._sweep_pattern, self._sweep_tokens
+            cached = (version, pattern, tokens)
+            self._sweeps[workspace] = cached
+            if len(self._sweeps) > MAX_CACHED_SWEEPS:
+                self._sweeps.popitem(last=False)
+        self._sweeps.move_to_end(workspace)
+        return cached[1], cached[2]
 
     @staticmethod
     def find_hard_identifiers(text: str) -> list[str]:
@@ -87,20 +94,21 @@ class EgressGuard:
                 break
         return found
 
-    def remask_known_values(self, text: str) -> tuple[str, int]:
-        """Replace any clear-text value the vault already holds with its token."""
-        pattern, tokens = self._sweep()
+    def remask_known_values(self, text: str, workspace: str = DEFAULT_WORKSPACE) -> tuple[str, int]:
+        """Replace any clear-text value the workspace's vault already holds with its token."""
+        pattern, tokens = self._sweep(workspace)
         if pattern is None:
             return text, 0
         return pattern.subn(lambda m: tokens[m.group().lower()], text)
 
-    def enforce(self, text: str, purpose: str) -> EgressReport:
+    def enforce(self, text: str, purpose: str, workspace: str = DEFAULT_WORKSPACE) -> EgressReport:
         """Return text that is safe to send, or raise EgressBlockedError."""
-        text, remasked = self.remask_known_values(text)
+        text, remasked = self.remask_known_values(text, workspace)
 
         leftovers = self.find_hard_identifiers(text)
         if leftovers:
-            self.audit.log_operation("egress", "blocked", {"purpose": purpose, "entity_types": leftovers})
+            self.audit.log_operation("egress", "blocked", {"purpose": purpose, "entity_types": leftovers},
+                                     workspace=workspace)
             logger.warning("Blocked egress for %s: %s still in clear text", purpose, leftovers)
             raise EgressBlockedError(
                 "Blocked: the request still contained identifiers after masking "
@@ -109,5 +117,5 @@ class EgressGuard:
 
         self.audit.log_operation("egress", "allowed", {
             "purpose": purpose, "chars": len(text), "remasked_known_values": remasked,
-        })
+        }, workspace=workspace)
         return EgressReport(text, remasked)

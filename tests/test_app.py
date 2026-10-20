@@ -49,3 +49,23 @@ def test_previews_never_end_inside_a_token():
 
 def test_health_trace_shows_no_stack_when_warm_up_is_not_running(client):
     assert client.get("/api/health?trace=1").get_json()["warm_up_stack"] == []
+
+
+def test_warm_up_starts_on_the_first_request_in_each_process(client, monkeypatch):
+    started = []
+    monkeypatch.setenv("ZT_EAGER_INIT", "1")
+    monkeypatch.setattr(web, "_warm_up_pipeline", lambda: started.append(os.getpid()))
+    monkeypatch.setattr(web, "_warm_up_pid", None)
+    client.get("/api/health")
+    client.get("/api/health")
+    for t in web.threading.enumerate():
+        if t.name == "warm-up":
+            t.join(timeout=5)
+    assert started == [os.getpid()]
+
+    monkeypatch.setattr(web, "_warm_up_pid", -1)  # as if this process had been forked from another
+    client.get("/api/health")
+    for t in web.threading.enumerate():
+        if t.name == "warm-up":
+            t.join(timeout=5)
+    assert started == [os.getpid(), os.getpid()]

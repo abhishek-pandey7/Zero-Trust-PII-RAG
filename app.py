@@ -104,8 +104,29 @@ def _rss_mb() -> int | None:
         return None
 
 
-if os.getenv("ZT_EAGER_INIT", "1") == "1" and os.getenv("FLASK_ENV") != "testing":
-    threading.Thread(target=_warm_up_pipeline, name="warm-up", daemon=True).start()
+_warm_up_pid: int | None = None
+_warm_up_lock = threading.Lock()
+
+
+@app.before_request
+def _start_warm_up_in_this_process() -> None:
+    """Start loading the models on the first request a process serves, in that process.
+
+    Not at import: when gunicorn imports the app in its master and then forks a worker, a thread
+    started at import keeps running in the master only. The worker inherited a 'loading' state with
+    no thread behind it and never loaded, while the master loaded a second copy of the models
+    into the same 512 MB. Requests only reach workers, and the host's health checks arrive seconds
+    after boot, so loading still starts almost at once.
+    """
+    global _warm_up_pid
+    if _warm_up_pid == os.getpid() or os.getenv("ZT_EAGER_INIT", "1") != "1":
+        return
+    with _warm_up_lock:
+        if _warm_up_pid == os.getpid():
+            return
+        _warm_up_pid = os.getpid()
+        _warm_up.update(state="pending", attempts=0, last_error=None)
+        threading.Thread(target=_warm_up_pipeline, name="warm-up", daemon=True).start()
 
 
 def _now() -> str:

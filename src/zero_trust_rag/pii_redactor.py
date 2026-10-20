@@ -38,7 +38,7 @@ ENTITY_TYPES = config.get("presidio.entity_types", [
     "IN_AADHAAR",
 ])
 
-SCORE_THRESHOLD = config.get("presidio.score_threshold", 0.3)
+SCORE_THRESHOLD = config.get("presidio.score_threshold", 0.4)
 
 # When recognizers claim overlapping text, the label comes from the most specific one. A checksum-
 # or format-backed identifier (SSN, Aadhaar, account number) outranks a name, which outranks the
@@ -55,46 +55,40 @@ def _priority(entity_type: str) -> int:
 
 
 class AadhaarRecognizer(PatternRecognizer):
-    """Custom recognizer for Indian Aadhaar numbers."""
-    
+    """Indian Aadhaar numbers written in three groups of four digits."""
+
     def __init__(self):
-        patterns = [
-            Pattern("Aadhaar separator", r"\b\d{4}[-\s]\d{4}[-\s]\d{4}\b", 0.85)
-        ]
         super().__init__(
             supported_entity="IN_AADHAAR",
-            patterns=patterns
+            patterns=[Pattern("Aadhaar grouped", r"\b\d{4}[-\s]\d{4}[-\s]\d{4}\b", 0.85)],
+            context=["aadhaar", "aadhar", "uid", "uidai"],
         )
-    
-    def invalidate_cached_results(self):
-        pass
 
 
 class IndianPhoneRecognizer(PatternRecognizer):
-    """Custom recognizer for Indian phone numbers."""
-    
+    """Indian mobile numbers. A bare 10-digit run only counts when a word like 'phone' is nearby."""
+
     def __init__(self):
-        patterns = [
-            Pattern("India phone +91", r"\+91[-\s]?\d{5}[-\s]?\d{5}", 0.7),
-            Pattern("India phone 10 digit", r"\b\d{10}\b", 0.5),
-            Pattern("India phone split", r"\b\d{5}[-\s]?\d{5}\b", 0.6)
-        ]
         super().__init__(
             supported_entity="PHONE_NUMBER",
-            patterns=patterns
+            patterns=[
+                Pattern("India phone +91", r"\+91[-\s]?[6-9]\d{4}[-\s]?\d{5}\b", 0.7),
+                Pattern("India phone split", r"\b[6-9]\d{4}[-\s]\d{5}\b", 0.6),
+                # 0.3 is below the threshold on its own; the context boost (+0.35) lifts it over
+                Pattern("India phone 10 digit", r"\b[6-9]\d{9}\b", 0.3),
+            ],
+            context=["phone", "mobile", "cell", "contact", "tel", "whatsapp"],
         )
 
 
 class PANRecognizer(PatternRecognizer):
-    """Custom recognizer for Indian PAN numbers."""
-    
+    """Indian Permanent Account Numbers: five letters, four digits, one letter."""
+
     def __init__(self):
-        patterns = [
-            Pattern("PAN format", r"\b[A-Z]{5}\d{4}[A-Z]\b", 0.8)
-        ]
         super().__init__(
             supported_entity="IN_PAN",
-            patterns=patterns
+            patterns=[Pattern("PAN format", r"\b[A-Z]{5}\d{4}[A-Z]\b", 0.8)],
+            context=["pan", "permanent account"],
         )
 
 

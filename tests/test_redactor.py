@@ -107,13 +107,11 @@ def test_overlapping_spans_are_merged_so_no_flagged_character_leaks(redactor):
     assert (merged.entity_type, merged.start, merged.end) == ("IN_AADHAAR", 0, 15)
 
 
-@pytest.mark.xfail(reason="unformatted SSNs score below the 0.6 threshold even with context")
 def test_unformatted_ssn_with_context_is_caught(redactor):
     masked, _ = redactor.redact("Social Security Number 536221874")
     assert "536221874" not in masked
 
 
-@pytest.mark.xfail(reason="bank account numbers are not in the configured entity list")
 def test_bank_account_number_is_labelled_as_one(redactor):
     _, log = redactor.redact("Account number: 004512339871")
     assert [e["entity_type"] for e in log] == ["US_BANK_NUMBER"]

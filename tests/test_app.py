@@ -45,3 +45,7 @@ def test_previews_never_end_inside_a_token():
     text = "x" * 1190 + "<<US_BANK_NUMBER_01_6b63>> and more"
     assert web._preview(text) == "x" * 1190 + "..."
     assert web._preview("short") == "short"
+
+
+def test_health_trace_shows_no_stack_when_warm_up_is_not_running(client):
+    assert client.get("/api/health?trace=1").get_json()["warm_up_stack"] == []

@@ -13,6 +13,7 @@ from flask_socketio import SocketIO, emit
 
 from src import APIError, EgressBlockedError, ValidationError, ZeroTrustRAG, ZeroTrustRAGError
 from src.zero_trust_rag.config import Config
+from src.zero_trust_rag.utils import validate_input
 
 load_dotenv()
 
@@ -90,6 +91,7 @@ def _error(e: Exception, status: int):
 
 def _ingest(text: str, source: str | None = None) -> dict:
     """Ingest text and report progress over the socket. Redaction runs exactly once."""
+    validate_input(text)  # before loading anything: an oversized upload is refused, not an OOM kill
     bot = get_rag()
     socketio.emit('ingestion_start', {'text_length': len(text), 'source': source, 'timestamp': _now()})
 
@@ -205,6 +207,7 @@ def api_ask():
         return jsonify({'success': False, 'error': 'No question provided'}), 400
 
     try:
+        validate_input(question)
         bot = get_rag()
         socketio.emit('query_processing', {'timestamp': _now()})
         result = bot.ask(question)

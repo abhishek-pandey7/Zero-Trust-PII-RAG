@@ -13,6 +13,6 @@ USER app
 # Fetch the embedding model into ./models at build time, not on the first request
 RUN python scripts/prefetch_models.py
 
-ENV PORT=5000 MALLOC_ARENA_MAX=2
+ENV PORT=5000 MALLOC_ARENA_MAX=2 ZT_MAX_INPUT_CHARS=30000
 EXPOSE 5000
 CMD gunicorn --worker-class gthread --threads 8 --workers 1 --timeout 120 --bind 0.0.0.0:$PORT app:app

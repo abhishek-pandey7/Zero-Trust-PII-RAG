@@ -18,6 +18,9 @@ services:
       # glibc gives each thread its own malloc arena by default; two keeps memory flat under threads
       - key: MALLOC_ARENA_MAX
         value: "2"
+      # Peak memory is ~450 MB at 25,000 characters per request; refuse bigger inputs, don't crash
+      - key: ZT_MAX_INPUT_CHARS
+        value: "30000"
       - key: GROQ_API_KEY
         sync: false
       - key: SECRET_KEY

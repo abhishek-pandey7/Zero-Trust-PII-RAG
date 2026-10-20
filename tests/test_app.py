@@ -30,3 +30,10 @@ def test_policies_show_the_real_threshold(client):
 @pytest.mark.parametrize("path, body", [("/api/ingest", {"data": "  "}), ("/api/ask", {"question": ""})])
 def test_empty_input_is_a_400(client, path, body):
     assert client.post(path, json=body).status_code == 400
+
+
+def test_oversized_input_is_refused_with_a_clear_message(client, monkeypatch):
+    monkeypatch.setenv("ZT_MAX_INPUT_CHARS", "50")
+    response = client.post("/api/ask", json={"question": "x" * 60})
+    assert response.status_code == 400
+    assert "accepts up to 50" in response.get_json()["error"]

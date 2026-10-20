@@ -14,6 +14,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv()
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # LLM replies use non-cp1252 spaces
 
 if not os.getenv("GROQ_API_KEY"):
     sys.exit("GROQ_API_KEY not found. Add it to .env (get one at https://console.groq.com/).")

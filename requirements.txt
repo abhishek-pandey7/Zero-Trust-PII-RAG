@@ -1,39 +1,30 @@
-# Core dependencies
-python-dotenv==1.0.1
-PyYAML==6.0.1
-requests==2.31.0
+# Runtime dependencies, pinned to the versions the test suite runs against.
 
-# PII Detection (sm model for Render memory limits)
+# Config and environment
+python-dotenv==1.2.2
+PyYAML==6.0.3
+requests==2.33.1
+
+# PII detection
 presidio-analyzer==2.2.362
-presidio-anonymizer==2.2.362
-spacy==3.7.5
-https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.0/en_core_web_sm-3.7.0-py3-none-any.whl
+spacy==3.8.14
+en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
 
-# LLM & Embeddings (API-only, extremely lightweight)
-langchain-core>=0.3.0,<0.4
-langchain-community>=0.3.0,<0.4
-langchain-groq>=0.2.0
-langchain-text-splitters>=0.3.0,<0.4
-groq>=0.30.0
-huggingface_hub==0.23.0
+# LLM, embeddings and retrieval
+langchain-core==1.2.29
+langchain-community==0.4.1
+langchain-groq==1.1.2
+langchain-text-splitters==1.1.1
+groq==0.37.1
+huggingface_hub==1.10.2
+chromadb==1.5.7
 
-# Vector Database (Using versions with stable Windows 3.12 wheels)
-chromadb>=0.5.3
-langchain-chroma>=0.1.2
+# Web
+Flask==3.1.3
+Flask-SocketIO==5.6.1
+gunicorn==25.3.0
+eventlet==0.41.0
 
-# Web Framework
-Flask==3.0.3
-Flask-SocketIO==5.3.6
-gunicorn==23.0.0
-eventlet==0.36.1
-
-# Document Processing Support
+# Document upload
 PyMuPDF==1.24.0
-python-docx==1.1.0
-
-# Utilities
-pydantic>=2.7.4
-numpy==1.26.0
-tenacity==8.3.0
-regex==2024.5.15
-rich==13.7.0
+python-docx==1.2.0

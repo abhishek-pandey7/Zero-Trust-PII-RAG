@@ -3,14 +3,15 @@ app.py – Flask web application with WebSocket support for real-time PII protec
 Deployed on Render (requires gunicorn with eventlet/gevent for production).
 """
 import os
+import tempfile
 import time
 from datetime import datetime
-from dotenv import load_dotenv
-from flask import Flask, render_template, request, jsonify
-from flask_socketio import SocketIO, emit
-import tempfile
 
-from src import ZeroTrustRAG, ZeroTrustRAGError, ValidationError, APIError
+from dotenv import load_dotenv
+from flask import Flask, jsonify, render_template, request
+from flask_socketio import SocketIO, emit
+
+from src import APIError, ValidationError, ZeroTrustRAG, ZeroTrustRAGError
 
 load_dotenv()
 
@@ -113,7 +114,7 @@ def extract_text_from_file(filepath, filename):
     ext = filename.rsplit('.', 1)[-1].lower() if '.' in filename else ''
     
     if ext == 'txt':
-        with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+        with open(filepath, encoding='utf-8', errors='ignore') as f:
             return f.read()
     
     elif ext == 'pdf':
@@ -126,7 +127,7 @@ def extract_text_from_file(filepath, filename):
             doc.close()
             return text
         except ImportError:
-            raise ValueError("PDF support requires PyMuPDF. Install with: pip install PyMuPDF")
+            raise ValueError("PDF support requires PyMuPDF. Install with: pip install PyMuPDF") from None
     
     elif ext in ('docx', 'doc'):
         try:
@@ -134,7 +135,7 @@ def extract_text_from_file(filepath, filename):
             doc = Document(filepath)
             return '\n'.join([p.text for p in doc.paragraphs])
         except ImportError:
-            raise ValueError("DOCX support requires python-docx. Install with: pip install python-docx")
+            raise ValueError("DOCX support requires python-docx. Install with: pip install python-docx") from None
     
     else:
         raise ValueError(f"Unsupported file type: .{ext}. Supported: .txt, .pdf, .docx")

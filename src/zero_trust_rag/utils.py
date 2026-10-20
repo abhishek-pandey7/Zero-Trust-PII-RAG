@@ -1,10 +1,11 @@
 """
 utils.py – Utility functions for Zero-Trust RAG.
 """
-import time
 import logging
+import time
+from collections.abc import Callable
 from functools import wraps
-from typing import Callable, TypeVar, Any
+from typing import Any, TypeVar
 
 from .config import Config
 from .exceptions import APIError, ValidationError

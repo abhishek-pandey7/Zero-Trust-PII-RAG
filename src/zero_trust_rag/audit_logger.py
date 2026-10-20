@@ -35,14 +35,13 @@ class AuditLogger:
         with self._lock, open(self._log_path, "a", encoding="utf-8") as f:
             f.write(line + "\n")
 
-    def log_redaction(self, event_type: str, entity_type: str, token: str,
-                      text_preview: str = "", action: str = "mask") -> None:
+    def log_redaction(self, event_type: str, entity_type: str, token: str, action: str = "mask") -> None:
+        """Record that a value was tokenized. Only the token is logged, never the value or its text."""
         self._write({
             "timestamp": _utc_now(),
             "event_type": event_type,
             "entity_type": entity_type,
             "token": token,
-            "text_preview": text_preview[:50],
             "action": action,
         })
 

@@ -36,9 +36,14 @@ presidio:
     - MEDICAL_LICENSE
     - US_PASSPORT
     - US_DRIVER_LICENSE
+    - US_BANK_NUMBER
+    - US_ITIN
     - IN_PAN
     - IN_AADHAAR
-  score_threshold: 0.6
+  # 0.4 is Presidio's floor for a weak pattern that has a context word nearby (e.g. a bare 9-digit
+  # number next to "social security"). Weak patterns with no context score lower and are ignored.
+  # 0.6 used to silently drop those, and in a PII system a miss is a leak.
+  score_threshold: 0.4
 
 security:
   audit_log_path: "./audit.log"

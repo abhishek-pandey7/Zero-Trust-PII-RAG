@@ -1,8 +1,10 @@
 """
 pii_redactor.py – Uses Microsoft Presidio to detect and mask PII entities.
 
-This module provides PII detection and redaction with configurable
-entity types and audit logging.
+Every detected span is replaced with a vault token before the text goes anywhere else. The rules
+that decide what counts as a span lean toward recall: when two recognizers disagree about where an
+entity starts or ends, the union of their spans is masked, because an unmasked character is a leak
+and an over-masked one only costs some answer quality.
 """
 import logging
 import re
@@ -36,50 +38,57 @@ ENTITY_TYPES = config.get("presidio.entity_types", [
     "IN_AADHAAR",
 ])
 
-SCORE_THRESHOLD = config.get("presidio.score_threshold", 0.3)
+SCORE_THRESHOLD = config.get("presidio.score_threshold", 0.4)
+
+# When recognizers claim overlapping text, the label comes from the most specific one. A checksum-
+# or format-backed identifier (SSN, Aadhaar, account number) outranks a name, which outranks the
+# generic NER labels that fire on almost any number or place.
+GENERIC_ENTITIES = {"DATE_TIME", "LOCATION", "NRP", "URL"}
+
+
+def _priority(entity_type: str) -> int:
+    if entity_type in GENERIC_ENTITIES:
+        return 0
+    if entity_type == "PERSON":
+        return 1
+    return 2
 
 
 class AadhaarRecognizer(PatternRecognizer):
-    """Custom recognizer for Indian Aadhaar numbers."""
-    
+    """Indian Aadhaar numbers written in three groups of four digits."""
+
     def __init__(self):
-        patterns = [
-            Pattern("Aadhaar separator", r"\b\d{4}[-\s]\d{4}[-\s]\d{4}\b", 0.85)
-        ]
         super().__init__(
             supported_entity="IN_AADHAAR",
-            patterns=patterns
+            patterns=[Pattern("Aadhaar grouped", r"\b\d{4}[-\s]\d{4}[-\s]\d{4}\b", 0.85)],
+            context=["aadhaar", "aadhar", "uid", "uidai"],
         )
-    
-    def invalidate_cached_results(self):
-        pass
 
 
 class IndianPhoneRecognizer(PatternRecognizer):
-    """Custom recognizer for Indian phone numbers."""
-    
+    """Indian mobile numbers. A bare 10-digit run only counts when a word like 'phone' is nearby."""
+
     def __init__(self):
-        patterns = [
-            Pattern("India phone +91", r"\+91[-\s]?\d{5}[-\s]?\d{5}", 0.7),
-            Pattern("India phone 10 digit", r"\b\d{10}\b", 0.5),
-            Pattern("India phone split", r"\b\d{5}[-\s]?\d{5}\b", 0.6)
-        ]
         super().__init__(
             supported_entity="PHONE_NUMBER",
-            patterns=patterns
+            patterns=[
+                Pattern("India phone +91", r"\+91[-\s]?[6-9]\d{4}[-\s]?\d{5}\b", 0.7),
+                Pattern("India phone split", r"\b[6-9]\d{4}[-\s]\d{5}\b", 0.6),
+                # 0.3 is below the threshold on its own; the context boost (+0.35) lifts it over
+                Pattern("India phone 10 digit", r"\b[6-9]\d{9}\b", 0.3),
+            ],
+            context=["phone", "mobile", "cell", "contact", "tel", "whatsapp"],
         )
 
 
 class PANRecognizer(PatternRecognizer):
-    """Custom recognizer for Indian PAN numbers."""
-    
+    """Indian Permanent Account Numbers: five letters, four digits, one letter."""
+
     def __init__(self):
-        patterns = [
-            Pattern("PAN format", r"\b[A-Z]{5}\d{4}[A-Z]\b", 0.8)
-        ]
         super().__init__(
             supported_entity="IN_PAN",
-            patterns=patterns
+            patterns=[Pattern("PAN format", r"\b[A-Z]{5}\d{4}[A-Z]\b", 0.8)],
+            context=["pan", "permanent account"],
         )
 
 
@@ -92,15 +101,14 @@ class PIIRedactor:
     def __init__(self, vault: PIIVault, audit_logger: AuditLogger | None = None):
         self.vault = vault
         self.audit = audit_logger or AuditLogger()
-        
-        nlp_configuration = {
+
+        # Pass the engine in: AnalyzerEngine() on its own loads en_core_web_lg (and downloads it if
+        # it is missing), which costs ~600 MB before being thrown away.
+        nlp_engine = NlpEngineProvider(nlp_configuration={
             "nlp_engine_name": "spacy",
-            "models": [{"lang_code": "en", "model_name": "en_core_web_sm"}]
-        }
-        nlp_engine = NlpEngineProvider(nlp_configuration=nlp_configuration).create_engine()
-        
-        self.analyzer = AnalyzerEngine()
-        self.analyzer.nlp_engine = nlp_engine
+            "models": [{"lang_code": "en", "model_name": "en_core_web_sm"}],
+        }).create_engine()
+        self.analyzer = AnalyzerEngine(nlp_engine=nlp_engine, supported_languages=["en"])
         self.analyzer.registry.add_recognizer(AadhaarRecognizer())
         self.analyzer.registry.add_recognizer(IndianPhoneRecognizer())
         self.analyzer.registry.add_recognizer(PANRecognizer())
@@ -109,101 +117,94 @@ class PIIRedactor:
     def sanitize_input(text: str) -> str:
         if not text:
             return ""
-        
         sanitized = re.sub(r'[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f]', '', text)
         sanitized = re.sub(r'[\x80-\x9f]', '', sanitized)
-        
         return sanitized.strip()
+
+    def detect(self, text: str) -> list[RecognizerResult]:
+        """Find PII spans in already-sanitized text, cleaned up and free of overlaps."""
+        results = self.analyzer.analyze(
+            text=text,
+            entities=ENTITY_TYPES,
+            language="en",
+            score_threshold=SCORE_THRESHOLD,
+        )
+        cleaned = [r for r in (self._trim(text, r) for r in results) if r is not None]
+        return self._merge_overlaps(cleaned)
+
+    @staticmethod
+    def _trim(text: str, result: RecognizerResult) -> RecognizerResult | None:
+        """Tighten a span to the entity itself, or drop it if nothing identifying is left."""
+        start, end = result.start, result.end
+
+        # Structured records put one field per line; NER sometimes runs a name into the next line
+        line_break = re.search(r"[\r\n]", text[start:end])
+        if line_break:
+            end = start + line_break.start()
+        while end > start and text[end - 1].isspace():
+            end -= 1
+
+        if result.entity_type == "PERSON":
+            # "Priya Sharma's" and "Priya Sharma" must map to the same token
+            if text[start:end].lower().endswith("'s"):
+                end -= 2
+            elif text[start:end].endswith("'"):
+                end -= 1
+
+        if result.entity_type == "DATE_TIME" and not re.search(r"\d", text[start:end]):
+            # "quarterly", "last year", "Monday": relative dates identify no one
+            return None
+
+        if end <= start:
+            return None
+        return RecognizerResult(result.entity_type, start, end, result.score)
+
+    @staticmethod
+    def _merge_overlaps(results: list[RecognizerResult]) -> list[RecognizerResult]:
+        """Merge overlapping spans into one span covering all of them.
+
+        Masking the union means no character any recognizer flagged is left in clear text. The
+        merged span takes the most specific label (see _priority), then the highest score.
+        """
+        merged: list[RecognizerResult] = []
+        for r in sorted(results, key=lambda r: (r.start, r.end)):
+            if merged and r.start < merged[-1].end:
+                current = merged[-1]
+                best = max(current, r, key=lambda x: (_priority(x.entity_type), x.score))
+                merged[-1] = RecognizerResult(
+                    best.entity_type, current.start, max(current.end, r.end), best.score
+                )
+            else:
+                merged.append(r)
+        return merged
 
     def redact(self, text: str, event_type: str = "ingest") -> tuple[str, list[dict]]:
         sanitized = self.sanitize_input(text)
-        
         if not sanitized:
             return text, []
 
-        results = self.analyzer.analyze(
-            text=sanitized,
-            entities=ENTITY_TYPES,
-            language='en',
-            score_threshold=SCORE_THRESHOLD,
-        )
+        spans = self.detect(sanitized)
 
-        if not results:
-            return sanitized, []
+        # Build the output in one pass; slicing a new string per entity is quadratic on big documents
+        pieces: list[str] = []
+        log: list[dict] = []
+        cursor = 0
+        for span in spans:
+            real_value = sanitized[span.start:span.end]
+            token = self.vault.store(span.entity_type, real_value)
+            pieces.append(sanitized[cursor:span.start])
+            pieces.append(token)
+            cursor = span.end
+            log.append({"original_value": real_value, "entity_type": span.entity_type, "token": token})
+        pieces.append(sanitized[cursor:])
 
-        corrected_results = []
-        for result in results:
-            matched_text = sanitized[result.start:result.end]
-            
-            # Prevent entities from spanning across newlines (common issue in structured records)
-            if '\n' in matched_text:
-                # Truncate at the newline
-                result.end = result.start + matched_text.index('\n')
-            elif '\r' in matched_text:
-                result.end = result.start + matched_text.index('\r')
-                
-            # Entity-specific post-processing
-            if result.entity_type == "PERSON":
-                # Trim trailing spaces if any
-                while result.end > result.start and sanitized[result.end-1].isspace():
-                    result.end -= 1
-                    
-                # Trim trailing possessives to ensure consistent token mapping
-                current_match = sanitized[result.start:result.end].lower()
-                if current_match.endswith("'s"):
-                    result.end -= 2
-                elif current_match.endswith("'"):
-                    result.end -= 1
-            
-            # Only keep if it still has length
-            if result.end > result.start:
-                corrected_results.append(result)
+        # Audit after masking is complete and record only tokens: the audit trail must never hold
+        # the values it exists to protect
+        for entry in log:
+            self.audit.log_redaction(event_type, entry["entity_type"], entry["token"])
 
-        results = corrected_results
-
-        results = self._remove_overlaps(results)
-        results = sorted(results, key=lambda r: r.start, reverse=True)
-
-        log = []
-        safe_text = sanitized
-        
-        for result in results:
-            real_value = sanitized[result.start:result.end]
-            token = self.vault.store(result.entity_type, real_value)
-            safe_text = safe_text[:result.start] + token + safe_text[result.end:]
-            
-            log.append({
-                "original_value": real_value,
-                "entity_type": result.entity_type,
-                "token": token
-            })
-            
-            self.audit.log_redaction(
-                event_type=event_type,
-                entity_type=result.entity_type,
-                token=token,
-                text_preview=safe_text[:50]
-            )
-
-        logger.info(f"Redacted {len(log)} PII entities ({event_type})")
-        return safe_text, log
-
-    def _remove_overlaps(self, results: list[RecognizerResult]) -> list[RecognizerResult]:
-        """Remove overlapping results, keeping the highest scoring ones."""
-        if not results:
-            return []
-        
-        results = sorted(results, key=lambda r: (r.start, -r.score))
-        
-        filtered = []
-        last_end = -1
-        
-        for result in results:
-            if result.start >= last_end:
-                filtered.append(result)
-                last_end = result.end
-        
-        return filtered
+        logger.info("Redacted %d PII entities (%s)", len(log), event_type)
+        return "".join(pieces), log
 
     def redact_batch(self, texts: list[str], event_type: str = "batch") -> list[tuple[str, list[dict]]]:
         return [self.redact(text, event_type) for text in texts]

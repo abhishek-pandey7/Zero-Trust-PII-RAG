@@ -66,10 +66,14 @@ def test_text_without_pii_is_unchanged(redactor):
     assert log == []
 
 
-@pytest.mark.xfail(reason="spaCy tags relative dates like 'quarterly' as DATE_TIME and they get tokenized")
 def test_relative_date_words_are_not_tokenized(redactor):
     text = "The quarterly report is attached."
     assert redactor.redact(text)[0] == text
+
+
+def test_calendar_dates_are_still_tokenized(redactor):
+    masked, _ = redactor.redact("DOB: 24-11-1987")
+    assert "1987" not in masked
 
 
 def test_control_characters_are_stripped():
@@ -83,7 +87,6 @@ def test_aadhaar_is_labelled_as_aadhaar(redactor):
     assert [e["entity_type"] for e in log] == ["IN_AADHAAR"]
 
 
-@pytest.mark.xfail(reason="ties on start offset are broken by list order, so DATE_TIME can win")
 @pytest.mark.parametrize("order", [0, 1])
 def test_specific_recognizer_beats_generic_ner_on_a_tie(redactor, order):
     """Presidio returns both IN_AADHAAR and DATE_TIME for '5425-2144-4943' with equal scores."""
@@ -93,24 +96,33 @@ def test_specific_recognizer_beats_generic_ner_on_a_tie(redactor, order):
     ]
     if order:
         spans.reverse()
-    assert [r.entity_type for r in redactor._remove_overlaps(spans)] == ["IN_AADHAAR"]
+    assert [r.entity_type for r in redactor._merge_overlaps(spans)] == ["IN_AADHAAR"]
 
 
-@pytest.mark.xfail(reason="overlap resolution keeps the earliest span, not the highest-scoring one")
-def test_overlap_keeps_the_higher_scoring_span(redactor):
-    low = RecognizerResult("DATE_TIME", start=0, end=12, score=0.3)
-    high = RecognizerResult("IN_AADHAAR", start=1, end=15, score=0.9)
-    kept = redactor._remove_overlaps([low, high])
-    assert [r.entity_type for r in kept] == ["IN_AADHAAR"]
+def test_overlapping_spans_are_merged_so_no_flagged_character_leaks(redactor):
+    """Keeping only one of two partly overlapping spans would leave the other's tail in clear text."""
+    generic = RecognizerResult("DATE_TIME", start=0, end=12, score=0.9)
+    specific = RecognizerResult("IN_AADHAAR", start=1, end=15, score=0.85)
+    (merged,) = redactor._merge_overlaps([generic, specific])
+    assert (merged.entity_type, merged.start, merged.end) == ("IN_AADHAAR", 0, 15)
 
 
-@pytest.mark.xfail(reason="unformatted SSNs score below the 0.6 threshold even with context")
 def test_unformatted_ssn_with_context_is_caught(redactor):
     masked, _ = redactor.redact("Social Security Number 536221874")
     assert "536221874" not in masked
 
 
-@pytest.mark.xfail(reason="bank account numbers are not in the configured entity list")
 def test_bank_account_number_is_labelled_as_one(redactor):
     _, log = redactor.redact("Account number: 004512339871")
     assert [e["entity_type"] for e in log] == ["US_BANK_NUMBER"]
+
+
+def test_bare_mobile_number_with_context_is_caught(redactor):
+    assert "9876543210" not in redactor.redact("Mobile: 9876543210")[0]
+
+
+def test_audit_log_never_contains_detected_values(redactor, tmp_path):
+    redactor.redact(RECORD)
+    audit_text = (tmp_path / "audit.log").read_text()
+    for secret in SECRETS:
+        assert secret not in audit_text

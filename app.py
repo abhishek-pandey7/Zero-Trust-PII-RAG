@@ -39,7 +39,7 @@ def _async_mode() -> str:
 # SocketIO setup - for real-time updates
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode=_async_mode())
 
-PREVIEW_CHARS = 500
+PREVIEW_CHARS = 1200
 
 _rag: ZeroTrustRAG | None = None
 _rag_lock = threading.Lock()
@@ -81,7 +81,14 @@ def _now() -> str:
 
 
 def _preview(text: str) -> str:
-    return text[:PREVIEW_CHARS] + ('...' if len(text) > PREVIEW_CHARS else '')
+    """The first PREVIEW_CHARS characters, never ending inside a <<TOKEN>>."""
+    if len(text) <= PREVIEW_CHARS:
+        return text
+    cut = PREVIEW_CHARS
+    opened = text.rfind('<<', 0, cut)
+    if opened != -1 and text.find('>>', opened, cut) == -1:
+        cut = opened
+    return text[:cut] + '...'
 
 
 def _error(e: Exception, status: int):
@@ -98,9 +105,11 @@ def _ingest(text: str, source: str | None = None) -> dict:
     result = bot.ingest(text)
 
     if result.redaction_details:
+        # Socket events go to every connected browser, so they carry types and tokens, never values
         socketio.emit('pii_detected', {
             'count': len(result.redaction_details),
-            'entities': result.redaction_details,
+            'entities': [{'entity_type': e['entity_type'], 'token': e['token']}
+                         for e in result.redaction_details],
             'timestamp': _now(),
         })
     socketio.emit('ingestion_complete', {

@@ -3,21 +3,16 @@
 # Config and environment
 python-dotenv==1.2.2
 PyYAML==6.0.3
-requests==2.33.1
 
 # PII detection
 presidio-analyzer==2.2.362
 spacy==3.8.14
 en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
 
-# LLM, embeddings and retrieval
-langchain-core==1.2.29
-langchain-community==0.4.1
-langchain-groq==1.1.2
-langchain-text-splitters==1.1.1
+# LLM, local embeddings (ONNX Runtime ships with chromadb) and retrieval
 groq==0.37.1
-huggingface_hub==1.10.2
 chromadb==1.5.7
+tenacity==9.1.4
 
 # Web
 Flask==3.1.3

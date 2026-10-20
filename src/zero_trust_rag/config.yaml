@@ -4,10 +4,15 @@ llm:
   provider: groq
   model: llama-3.3-70b-versatile
   temperature: 0
+  timeout_seconds: 30
+  # transient errors (timeouts, 429, 5xx) are retried with jittered exponential backoff
+  max_attempts: 3
 
+# Embeddings are computed locally (all-MiniLM-L6-v2 on ONNX Runtime), so chunks never leave the
+# process to be embedded. The LLM call is the only egress.
 embeddings:
-  provider: huggingface
-  model: sentence-transformers/all-MiniLM-L6-v2
+  provider: local
+  model: all-MiniLM-L6-v2
 
 chroma:
   persist_directory: "./chroma_store"
@@ -15,10 +20,9 @@ chroma:
 splitter:
   chunk_size: 500
   chunk_overlap: 100
-  separators: ["\n\n", "\n", " ", ""]
 
 retrieval:
-  top_k: 20
+  top_k: 10
 
 presidio:
   entity_types:
@@ -48,5 +52,3 @@ presidio:
 security:
   audit_log_path: "./audit.log"
   vault_db_path: "./vault.db"
-  max_retries: 3
-  retry_delay: 1.0

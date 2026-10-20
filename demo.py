@@ -1,161 +1,77 @@
 """
-demo.py – Interactive showcase for the Zero-Trust PII-Redacting RAG Pipeline.
+demo.py – Command-line walkthrough: ingest a record full of PII, then ask about it.
+
+For each question it prints what the LLM was actually sent and what it replied, next to the
+unmasked answer you get back. Uses a throwaway vault and vector store in a temp directory.
+
+    python demo.py          # needs GROQ_API_KEY in .env
 """
 import os
 import sys
+import tempfile
+from pathlib import Path
 
 from dotenv import load_dotenv
 
-# Load environment variables
 load_dotenv()
 
-print("\n" + "=" * 70)
-print("  ZERO-TRUST PII RAG PIPELINE - DEMO")
-print("=" * 70)
+if not os.getenv("GROQ_API_KEY"):
+    sys.exit("GROQ_API_KEY not found. Add it to .env (get one at https://console.groq.com/).")
 
-# Check for API keys
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-HF_API_KEY = os.getenv("HUGGINGFACEHUB_API_TOKEN")
+from src import APIError, PIIVault, ZeroTrustRAG  # noqa: E402
+from src.zero_trust_rag.audit_logger import AuditLogger  # noqa: E402
 
-if not GROQ_API_KEY:
-    print("\n[!] ERROR: GROQ_API_KEY not found!")
-    print("    Please set it in your .env file:")
-    print("    GROQ_API_KEY=your_key_here")
-    print("    Get it from: https://console.groq.com/")
-    sys.exit(1)
+RECORD = """EMPLOYEE RECORD #1042
+Name: Amit Sharma
+Email: amit.sharma@corp.in
+Phone: +91-98765-43210
+PAN Card: ABCDE1234F
+Aadhaar: 5425-2144-4943
+Address: 123 Main Street, Mumbai, Maharashtra 400001
+Project: Operation Phoenix. Reports to Priya Rai (+91-98700-12345)."""
 
-if not HF_API_KEY:
-    print("\n[!] ERROR: HUGGINGFACEHUB_API_TOKEN not found!")
-    print("    Please set it in your .env file:")
-    print("    HUGGINGFACEHUB_API_TOKEN=your_token_here")
-    print("    Get it from: https://huggingface.co/settings/tokens")
-    sys.exit(1)
-
-print("\n[+] API keys loaded successfully")
-
-# Import after checking keys
-try:
-    from src import APIError, ZeroTrustRAG, ZeroTrustRAGError
-    print("[+] Modules imported successfully")
-except ImportError as e:
-    print(f"[!] Failed to import modules: {e}")
-    print("    Make sure you're in the project root directory")
-    sys.exit(1)
-
-print("\n" + "-" * 70)
-print("STEP 1: Initializing the Pipeline")
-print("-" * 70)
-
-try:
-    print("[...] Setting up Zero-Trust RAG with PII protection...")
-    bot = ZeroTrustRAG(groq_api_key=GROQ_API_KEY, hf_api_key=HF_API_KEY)
-    print("[+] Pipeline initialized!")
-except Exception as e:
-    print(f"[!] Failed to initialize: {e}")
-    sys.exit(1)
-
-print("\n" + "-" * 70)
-print("STEP 2: Ingesting Sensitive Data")
-print("-" * 70)
-
-# Sample data with various PII types
-sensitive_data = """
-EMPLOYEE RECORD #1042
-
-Personal Information:
-- Name: Amit Sharma
-- Email: amit.sharma@corp.in
-- Phone: +91-98765-43210
-- PAN Card: ABCDE1234F
-- Aadhaar: 1234-5678-9012
-
-Address:
-- 123 Main Street, Mumbai, Maharashtra 400001, India
-
-Work Info:
-- Project: Operation Phoenix (Confidential)
-- Performance: Top performer. Contact manager Priya Rai at +91-98700-12345.
-"""
-
-print("\n[INPUT] Original text (what YOU see):")
-print("_" * 70)
-print(sensitive_data.strip())
-print("_" * 70)
-
-print("\n[...] Sending to pipeline for ingestion...")
-print("    [>] PII detection (Microsoft Presidio)")
-print("    [>] Token generation & storage in vault")
-print("    [>] Text chunking")
-print("    [>] Embedding generation (HuggingFace)")
-print("    [>] Vector storage (ChromaDB)")
-
-try:
-    result = bot.ingest(sensitive_data)
-    
-    print("\n[+] INGESTION COMPLETE!")
-    print(f"    - Chunks created: {result['chunks_created']}")
-    print(f"    - PII entities detected & masked: {result['pii_redacted']}")
-    
-    if result['redaction_details']:
-        print("\n[TOKENS] PII replaced with tokens (what LLM sees):")
-        for item in result['redaction_details'][:5]:
-            print(f"    - {item['token']} ({item['entity_type']})")
-        if len(result['redaction_details']) > 5:
-            print(f"    ... and {len(result['redaction_details']) - 5} more")
-            
-except Exception as e:
-    print(f"[!] Ingestion failed: {e}")
-    sys.exit(1)
-
-print("\n" + "-" * 70)
-print("STEP 3: Querying the Secure Database")
-print("-" * 70)
-
-questions = [
+QUESTIONS = [
     "What is Amit Sharma's PAN Card number?",
-    "Who is the manager for the employee with Aadhaar 1234-5678-9012?",
-    "What is the phone number of the employee working on Operation Phoenix?"
+    "Who does the employee with Aadhaar 5425-2144-4943 report to?",
+    "What is the phone number of the employee working on Operation Phoenix?",
 ]
 
-for i, question in enumerate(questions, 1):
-    print(f"\n[Q{i}] {question}")
-    print("-" * 70)
-    
-    try:
-        print("[...] Processing query:")
-        print("    [>] PII detection in question")
-        print("    [>] Vector search in secure database")
-        print("    [>] LLM inference (Groq)")
-        print("    [>] Token unmasking for final answer")
-        
-        answer = bot.ask(question)
-        print(f"\n[A{i}] {answer}")
-        
-    except APIError as e:
-        print(f"[!] API Error: {e}")
-    except ZeroTrustRAGError as e:
-        print(f"[!] Pipeline Error: {e}")
 
-print("\n" + "=" * 70)
-print("FINAL STATISTICS")
-print("=" * 70)
+def rule(title: str) -> None:
+    print(f"\n{'-' * 72}\n{title}\n{'-' * 72}")
 
-stats = bot.get_stats()
-print("Vault contents:")
-for entity_type, count in stats.get('vault_stats', {}).items():
-    print(f"    - {entity_type}: {count} tokens stored")
-print(f"Storage location: {stats.get('persist_directory', 'N/A')}")
 
-print("\n" + "=" * 70)
-print("SECURITY SUMMARY")
-print("=" * 70)
-print("""
-[OK] All PII was masked BEFORE sending to external APIs
-[OK] LLM only saw tokens (e.g., <<PERSON_01_A1B2>>)
-[OK] Original values stored in local SQLite vault
-[OK] Unmasking only happened on your local machine
-[OK] All operations logged for compliance
-""")
+def main() -> None:
+    workdir = Path(tempfile.mkdtemp(prefix="zt-demo-"))
+    rule("Initializing (loads spaCy and the local embedding model)")
+    bot = ZeroTrustRAG(
+        persist_directory=str(workdir / "chroma"),
+        vault=PIIVault(str(workdir / "vault.db")),
+        audit=AuditLogger(str(workdir / "audit.log")),
+    )
 
-print("Demo complete! The code is working correctly.")
-print("=" * 70 + "\n")
+    rule("Ingesting")
+    print(RECORD)
+    result = bot.ingest(RECORD)
+    print(f"\nStored as {result.chunks_created} chunk(s), {result.pii_redacted} values tokenized:\n")
+    print(result.masked_text)
+
+    for i, question in enumerate(QUESTIONS, 1):
+        rule(f"Q{i}: {question}")
+        try:
+            answer = bot.ask(question)
+        except APIError as e:
+            print(f"LLM call failed: {e}")
+            continue
+        print(f"Sent to the LLM:  {answer.masked_question}")
+        print(f"LLM replied:      {answer.masked_answer}")
+        print(f"You see:          {answer.answer}")
+
+    rule("Vault contents")
+    for entity_type, count in bot.get_stats()["vault_stats"].items():
+        print(f"  {entity_type}: {count}")
+    print(f"\nEverything for this run is in {workdir}")
+
+
+if __name__ == "__main__":
+    main()

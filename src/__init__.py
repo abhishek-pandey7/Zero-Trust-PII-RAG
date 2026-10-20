@@ -4,6 +4,7 @@ Zero-Trust PII RAG
 from .zero_trust_rag import (
     APIError,
     ConfigurationError,
+    EgressBlockedError,
     PIIRedactor,
     PIIVault,
     RedactionError,
@@ -20,6 +21,7 @@ __all__ = [
     "PIIRedactor",
     "ZeroTrustRAGError",
     "ConfigurationError",
+    "EgressBlockedError",
     "APIError",
     "VaultError",
     "ValidationError",

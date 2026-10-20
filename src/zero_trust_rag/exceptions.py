@@ -34,3 +34,8 @@ class ValidationError(ZeroTrustRAGError):
 class RedactionError(ZeroTrustRAGError):
     """PII redaction errors."""
     pass
+
+
+class EgressBlockedError(ZeroTrustRAGError):
+    """Raised when text about to leave the trust boundary still contains identifiers."""
+    pass

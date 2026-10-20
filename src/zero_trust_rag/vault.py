@@ -5,12 +5,16 @@ This module provides secure storage and resolution of PII tokens.
 Data is persisted to SQLite for resume capability after restarts.
 """
 import logging
+import re
 import sqlite3
 import threading
 import uuid
 from contextlib import contextmanager
 
 from .config import Config
+
+# <<ENTITY_TYPE_NN_hhhh>>, tolerating missing angle brackets in LLM output
+TOKEN_PATTERN = re.compile(r"<{0,2}(?P<core>\b[A-Z][A-Z_]*_\d{2,}_[0-9a-f]{4}\b)>{0,2}")
 
 config = Config()
 logger = logging.getLogger(__name__)
@@ -112,24 +116,27 @@ class PIIVault:
                 return row["real_value"] if row else None
 
     def unmask_text(self, text: str) -> str:
-        with self._lock:
-            with self._get_connection() as conn:
-                cursor = conn.execute("SELECT token, real_value FROM token_mappings")
-                mapping = {row["token"]: row["real_value"] for row in cursor}
+        """Replace every token in text with its real value.
 
-        for token, real_value in mapping.items():
-            text = text.replace(token, real_value)
-        return text
+        Looks up only the tokens that actually appear, instead of scanning the whole vault. Also
+        accepts tokens an LLM has echoed without their angle brackets (PERSON_01_a1b2) or with one
+        bracket lost; unknown tokens are left as they are.
+        """
+        found = {m.group("core") for m in TOKEN_PATTERN.finditer(text)}
+        if not found:
+            return text
+        tokens = [f"<<{core}>>" for core in found]
+        placeholders = ",".join("?" * len(tokens))
+        with self._lock, self._get_connection() as conn:
+            rows = conn.execute(
+                f"SELECT token, real_value FROM token_mappings WHERE token IN ({placeholders})", tokens
+            ).fetchall()
+        values = {row["token"][2:-2]: row["real_value"] for row in rows}
+        return TOKEN_PATTERN.sub(lambda m: values.get(m.group("core"), m.group(0)), text)
 
     def get_stats(self) -> dict[str, int]:
         with self._lock:
             return dict(self._counters)
-
-    def get_all_tokens(self) -> dict[str, str]:
-        with self._lock:
-            with self._get_connection() as conn:
-                cursor = conn.execute("SELECT token, real_value FROM token_mappings")
-                return {row["token"]: row["real_value"] for row in cursor}
 
     def get_all_mappings(self) -> list[dict]:
         """Get all token mappings with full details for the UI."""

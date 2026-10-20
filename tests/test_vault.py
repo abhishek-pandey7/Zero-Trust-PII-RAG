@@ -59,3 +59,15 @@ def test_concurrent_stores_of_one_value_mint_one_token(vault):
 
     assert len(set(tokens)) == 1
     assert vault.get_stats() == {"US_SSN": 1}
+
+
+def test_unmask_accepts_tokens_the_llm_echoed_without_brackets(vault):
+    token = vault.store("PERSON", "Priya Sharma")
+    core = token.strip("<>")
+    assert vault.unmask_text(f"The client is {core}.") == "The client is Priya Sharma."
+    assert vault.unmask_text(f"The client is <{core}>.") == "The client is Priya Sharma."
+
+
+def test_unmask_leaves_unknown_tokens_alone(vault):
+    text = "Ask <<PERSON_42_beef>> about it."
+    assert vault.unmask_text(text) == text

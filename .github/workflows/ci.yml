@@ -30,3 +30,40 @@ jobs:
 
       - name: Test
         run: pytest -q -rxX
+
+  memory-budget:
+    # Render's free plan has 512 MB. Boot the real image under that hard limit, load the models,
+    # ingest 100 records and fail if the container is OOM-killed or comes close.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t zt .
+
+      - name: Boot under 512 MB
+        run: |
+          docker run -d --name zt -m 512m --memory-swap 512m -p 5000:5000 \
+            -e GROQ_API_KEY=ci-placeholder-key -e SECRET_KEY=ci zt
+          for i in $(seq 1 90); do
+            if curl -sf localhost:5000/api/health | grep -q '"rag_initialized":true'; then break; fi
+            sleep 2
+          done
+          curl -sf localhost:5000/api/health
+
+      - name: Ingest 100 records
+        run: |
+          python scripts/generate_records.py --count 100 --out records.txt
+          python -c "import json; print(json.dumps({'data': open('records.txt').read()}))" > body.json
+          curl -sf -X POST localhost:5000/api/ingest -H 'Content-Type: application/json' -d @body.json \
+            | python -c "import json,sys; r=json.load(sys.stdin); print('chunks', r['chunks_created'], 'pii', r['pii_redacted'])"
+
+      - name: Check memory
+        if: always()
+        run: |
+          docker logs zt 2>&1 | tail -20
+          test "$(docker inspect -f '{{.State.OOMKilled}}' zt)" = "false"
+          peak=$(docker exec zt cat /sys/fs/cgroup/memory.peak)
+          echo "Peak memory: $((peak / 1048576)) MB of 512 MB"
+          test "$peak" -lt $((480 * 1048576))

@@ -126,3 +126,35 @@ def test_audit_log_never_contains_detected_values(redactor, tmp_path):
     audit_text = (tmp_path / "audit.log").read_text()
     for secret in SECRETS:
         assert secret not in audit_text
+
+
+@pytest.mark.parametrize("line, secret", [
+    ("Name: Amit Sharma", "Amit Sharma"),  # spaCy's small model misses this one
+    ("Client Name: amit sharma", "amit sharma"),
+    ("- Beneficiary: Meera Iyer (spouse)", "Meera Iyer"),
+    ("Account Holder: Daniel O'Brien", "Daniel O'Brien"),
+    ("Address: 123 Main Street, Mumbai, Maharashtra 400001", "123 Main Street"),
+    ("DOB: 1987-11-24", "1987-11-24"),
+])
+def test_labelled_fields_are_masked(redactor, line, secret):
+    masked, _ = redactor.redact(line)
+    assert secret not in masked
+    assert masked.split(":")[0] == line.split(":")[0]  # the label itself stays readable
+
+
+def test_placeholder_values_in_labelled_fields_are_left_alone(redactor):
+    assert redactor.redact("Advisor: N/A")[0] == "Advisor: N/A"
+
+
+def test_whole_address_line_becomes_one_token(redactor):
+    _, log = redactor.redact("Address: Flat 658, Palm View, Pune, Maharashtra 400212")
+    assert [(e["entity_type"], e["original_value"]) for e in log] == [
+        ("LOCATION", "Flat 658, Palm View, Pune, Maharashtra 400212")
+    ]
+
+
+def test_unbalanced_brackets_stay_outside_the_token(redactor):
+    masked, log = redactor.redact("Reports to Priya Rai (+91-98700-12345).")
+    assert masked.endswith(").")
+    assert "(" in masked and "+91" not in masked
+    assert "+91-98700-12345" in [e["original_value"] for e in log]

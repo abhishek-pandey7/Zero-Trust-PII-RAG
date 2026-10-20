@@ -9,7 +9,7 @@ and an over-masked one only costs some answer quality.
 import logging
 import re
 
-from presidio_analyzer import AnalyzerEngine, Pattern, PatternRecognizer, RecognizerResult
+from presidio_analyzer import AnalyzerEngine, EntityRecognizer, Pattern, PatternRecognizer, RecognizerResult
 from presidio_analyzer.nlp_engine import NlpEngineProvider
 
 from .audit_logger import AuditLogger
@@ -92,6 +92,60 @@ class PANRecognizer(PatternRecognizer):
         )
 
 
+# Labelled fields in structured records ("Name: Amit Sharma"). The label is stronger evidence than
+# any NER model: spaCy's small model misses plenty of Indian and uncommon names, and an address or
+# date of birth on a labelled line is PII whatever its shape.
+FIELD_LABELS = {
+    "PERSON": [
+        "name", "full name", "client", "client name", "customer", "customer name", "account holder",
+        "joint holder", "joint account holder", "beneficiary", "nominee", "advisor", "financial advisor",
+        "advisor name", "representative", "rep", "employee", "employee name", "manager", "spouse",
+        "emergency contact", "contact person", "primary contact", "guardian", "trustee", "reports to",
+    ],
+    "LOCATION": ["address", "mailing address", "home address", "residential address", "street address"],
+    "DATE_TIME": ["dob", "d.o.b", "d.o.b.", "date of birth", "birth date", "birthdate"],
+}
+_LABEL_TO_ENTITY = {label: entity for entity, labels in FIELD_LABELS.items() for label in labels}
+_LABEL_ALTERNATION = "|".join(sorted((re.escape(lbl) for lbl in _LABEL_TO_ENTITY), key=len, reverse=True))
+FIELD_LINE = re.compile(
+    rf"^[ \t\-*•]*(?P<label>{_LABEL_ALTERNATION})[ \t]*[:=][ \t]*(?P<value>[^\r\n]+?)[ \t]*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+# A name is up to five words of letters, apostrophes, dots and hyphens; stop at anything else
+NAME_VALUE = re.compile(r"[A-Za-z][A-Za-z'.\-]+(?:[ \t]+[A-Za-z][A-Za-z'.\-]*){0,4}")
+
+
+class LabelledFieldRecognizer(EntityRecognizer):
+    """Names, addresses and dates of birth that follow a field label on their own line."""
+
+    def __init__(self):
+        super().__init__(supported_entities=list(FIELD_LABELS), name="LabelledFieldRecognizer")
+
+    def load(self) -> None:
+        pass
+
+    def analyze(self, text: str, entities: list[str], nlp_artifacts=None) -> list[RecognizerResult]:
+        results = []
+        for match in FIELD_LINE.finditer(text):
+            entity = _LABEL_TO_ENTITY[match.group("label").lower()]
+            if entity not in entities:
+                continue
+            start, end = match.span("value")
+            if entity == "PERSON":
+                name = NAME_VALUE.match(text, start, end)
+                if not name or name.end() - start < 2:
+                    continue  # "Name: N/A", "Advisor: -"
+                end = name.end()
+            results.append(RecognizerResult(
+                entity, start, end, 0.9,
+                recognition_metadata={
+                    RecognizerResult.RECOGNIZER_NAME_KEY: self.name,
+                    RecognizerResult.RECOGNIZER_IDENTIFIER_KEY: self.id,
+                },
+            ))
+        return results
+
+
 class PIIRedactor:
     """
     Detects PII in text and replaces each hit with a Vault-managed token.
@@ -112,6 +166,7 @@ class PIIRedactor:
         self.analyzer.registry.add_recognizer(AadhaarRecognizer())
         self.analyzer.registry.add_recognizer(IndianPhoneRecognizer())
         self.analyzer.registry.add_recognizer(PANRecognizer())
+        self.analyzer.registry.add_recognizer(LabelledFieldRecognizer())
 
     @staticmethod
     def sanitize_input(text: str) -> str:
@@ -142,6 +197,11 @@ class PIIRedactor:
         if line_break:
             end = start + line_break.start()
         while end > start and text[end - 1].isspace():
+            end -= 1
+        # An unbalanced bracket belongs to the sentence, not the entity: "(+91-98700-12345" -> number
+        if end > start and text[start] == "(" and ")" not in text[start:end]:
+            start += 1
+        if end > start and text[end - 1] == ")" and "(" not in text[start:end]:
             end -= 1
 
         if result.entity_type == "PERSON":

@@ -2,7 +2,10 @@ version: "1.0"
 
 llm:
   provider: groq
-  model: llama-3.3-70b-versatile
+  # Groq retired the Llama 3.x models. gpt-oss-120b keeps placeholders verbatim; gpt-oss-20b was
+  # tested too and refused to answer questions phrased around placeholders.
+  model: openai/gpt-oss-120b
+  reasoning_effort: low
   temperature: 0
   timeout_seconds: 30
   # transient errors (timeouts, 429, 5xx) are retried with jittered exponential backoff

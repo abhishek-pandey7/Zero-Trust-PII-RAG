@@ -85,10 +85,11 @@ class ZeroTrustRAG:
         self.embedder = embedder or LocalEmbedder()
         self.llm = llm or GroqLLM(
             api_key=groq_api_key or os.getenv("GROQ_API_KEY", ""),
-            model=config.get("llm.model", "llama-3.3-70b-versatile"),
+            model=config.get("llm.model", "openai/gpt-oss-120b"),
             temperature=config.get("llm.temperature", 0),
             timeout=config.get("llm.timeout_seconds", 30),
             max_attempts=config.get("llm.max_attempts", 3),
+            reasoning_effort=config.get("llm.reasoning_effort"),
         )
         self.splitter = TextSplitter(
             chunk_size=config.get("splitter.chunk_size", 500),

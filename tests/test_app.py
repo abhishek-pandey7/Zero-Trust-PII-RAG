@@ -19,6 +19,8 @@ def test_health_reports_version_and_mode(client, monkeypatch):
     assert body["status"] == "healthy"
     assert body["version"] == "0123456"
     assert body["async_mode"] == "threading"
+    assert body["warm_up"]["state"] in {"pending", "loading", "ready", "failed"}
+    assert body["uptime_seconds"] >= 0
 
 
 def test_policies_show_the_real_threshold(client):

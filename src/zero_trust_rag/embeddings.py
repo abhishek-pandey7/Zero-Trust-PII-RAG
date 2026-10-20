@@ -2,9 +2,9 @@
 embeddings.py – Sentence embeddings computed inside the trust boundary.
 
 all-MiniLM-L6-v2 runs locally through ONNX Runtime, so chunks are embedded on this machine and
-never leave it. The model is ~80 MB, downloaded once (via ChromaDB's downloader) and cached.
+never leave it. The model is ~90 MB, downloaded once from Hugging Face and kept in ./models.
 
-The forward pass is our own rather than ChromaDB's, for memory. ChromaDB pads every text to 256
+The forward pass is our own rather than ChromaDB's ONNX wrapper, for memory. ChromaDB pads every text to 256
 tokens, runs batches of 32 and leaves ONNX Runtime's memory arena on, so embedding 100 chunks
 grew the process by ~385 MB and got it OOM-killed on a 512 MB host. Padding to the longest text
 in the batch gives identical vectors (padding is masked out of attention and pooling) at a
@@ -32,16 +32,34 @@ class Embedder(Protocol):
     def embed(self, texts: list[str]) -> list[list[float]]: ...
 
 
-def _download_model() -> Path:
-    """Fetch the ONNX model and tokenizer if they aren't cached yet; return their folder."""
-    from chromadb.utils.embedding_functions import ONNXMiniLM_L6_V2
+# The official ONNX export on Hugging Face, pinned to one commit so the files can't change under us.
+# (ChromaDB's own download server dropped TLS connections from Render mid-download.)
+MODEL_REPO = "sentence-transformers/all-MiniLM-L6-v2"
+MODEL_REVISION = "1110a243fdf4706b3f48f1d95db1a4f5529b4d41"
+MODEL_FILES = ("onnx/model.onnx", "tokenizer.json")
 
-    class _Pinned(ONNXMiniLM_L6_V2):
-        DOWNLOAD_PATH = MODEL_DIR / ONNXMiniLM_L6_V2.MODEL_NAME
 
-    downloader = _Pinned(preferred_providers=["CPUExecutionProvider"])
-    downloader._download_model_if_not_exists()
-    return Path(_Pinned.DOWNLOAD_PATH) / _Pinned.EXTRACTED_FOLDER_NAME
+def _download_model(attempts: int = 4) -> Path:
+    """Fetch the ONNX model and tokenizer unless they're already on disk; return their folder.
+
+    Files already present are used without touching the network, so a model fetched at build time
+    means no download at runtime. Failed downloads are retried with backoff and resume where they
+    stopped.
+    """
+    from huggingface_hub import hf_hub_download
+    from tenacity import retry, stop_after_attempt, wait_random_exponential
+
+    folder = MODEL_DIR / MODEL_REPO.replace("/", "--")
+
+    @retry(stop=stop_after_attempt(attempts), wait=wait_random_exponential(multiplier=2, max=30), reraise=True)
+    def fetch(filename: str) -> None:
+        hf_hub_download(MODEL_REPO, filename, revision=MODEL_REVISION, local_dir=folder)
+
+    for filename in MODEL_FILES:
+        if not (folder / filename).is_file():
+            logger.info("Downloading %s from %s", filename, MODEL_REPO)
+            fetch(filename)
+    return folder
 
 
 class LocalEmbedder:
@@ -63,7 +81,7 @@ class LocalEmbedder:
         options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
         options.log_severity_level = 3
         self._session = ort.InferenceSession(
-            str(model_dir / "model.onnx"), sess_options=options, providers=["CPUExecutionProvider"]
+            str(model_dir / "onnx" / "model.onnx"), sess_options=options, providers=["CPUExecutionProvider"]
         )
 
         self._tokenizer = Tokenizer.from_file(str(model_dir / "tokenizer.json"))

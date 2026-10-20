@@ -114,3 +114,10 @@ def test_unformatted_ssn_with_context_is_caught(redactor):
 def test_bank_account_number_is_labelled_as_one(redactor):
     _, log = redactor.redact("Account number: 004512339871")
     assert [e["entity_type"] for e in log] == ["US_BANK_NUMBER"]
+
+
+def test_audit_log_never_contains_detected_values(redactor, tmp_path):
+    redactor.redact(RECORD)
+    audit_text = (tmp_path / "audit.log").read_text()
+    for secret in SECRETS:
+        assert secret not in audit_text

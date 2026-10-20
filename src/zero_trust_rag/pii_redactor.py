@@ -177,13 +177,11 @@ class PIIRedactor:
                 "entity_type": result.entity_type,
                 "token": token
             })
-            
-            self.audit.log_redaction(
-                event_type=event_type,
-                entity_type=result.entity_type,
-                token=token,
-                text_preview=safe_text[:50]
-            )
+
+        # Audit after masking is complete and record only tokens. Logging a preview inside the loop
+        # wrote the not-yet-replaced PII at the start of the text into the audit log.
+        for entry in log:
+            self.audit.log_redaction(event_type, entry["entity_type"], entry["token"])
 
         logger.info(f"Redacted {len(log)} PII entities ({event_type})")
         return safe_text, log

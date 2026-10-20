@@ -95,7 +95,7 @@ python demo.py                                    # command-line walkthrough
 pytest                                            # 81 tests
 ```
 
-The first start downloads the embedding model (80 MB) into `./models`. Synthetic data to try:
+The first start downloads the embedding model (90 MB, from Hugging Face) into `./models`. Synthetic data to try:
 `python scripts/generate_records.py --count 20`.
 
 With Docker, matching the hosted setup:

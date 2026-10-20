@@ -59,21 +59,42 @@ def get_rag() -> ZeroTrustRAG:
     return _rag
 
 
-_warm_up_error: str | None = None
+_started_at = time.time()
+_warm_up = {"state": "pending", "attempts": 0, "last_error": None}
+WARM_UP_ATTEMPTS = 6
 
 
-def _warm_up() -> None:
-    """Load spaCy and the embedding model at boot, so the first visitor doesn't wait ~20 s."""
-    global _warm_up_error
+def _warm_up_pipeline() -> None:
+    """Load spaCy and the embedding model at boot, so the first visitor doesn't wait for them.
+
+    Retries with backoff (10 s, 20 s, 40 s, ...): a host's first boot can hit a flaky network while
+    fetching the model, and one failure used to leave the pipeline unloaded until someone noticed.
+    Progress and the last error are reported by /api/health.
+    """
+    for attempt in range(1, WARM_UP_ATTEMPTS + 1):
+        _warm_up.update(state="loading", attempts=attempt)
+        try:
+            get_rag().embedder.embed(["warm up"])
+            _warm_up.update(state="ready", last_error=None)
+            return
+        except Exception as e:  # reported by /api/health instead of crashing the worker
+            _warm_up["last_error"] = f"{type(e).__name__}: {e}"[:300]
+            app.logger.exception("Pipeline warm-up attempt %d failed", attempt)
+            time.sleep(10 * 2 ** (attempt - 1))
+    _warm_up["state"] = "failed"
+
+
+def _rss_mb() -> int | None:
+    """Resident memory of this worker in MB (Linux only)."""
     try:
-        get_rag().embedder.embed(["warm up"])
-    except Exception as e:  # reported by /api/health instead of crashing the worker
-        _warm_up_error = f"{type(e).__name__}: {e}"
-        app.logger.exception("Pipeline warm-up failed")
+        with open("/proc/self/statm") as f:
+            return int(f.read().split()[1]) * os.sysconf("SC_PAGE_SIZE") // 1048576
+    except (OSError, ValueError, AttributeError):
+        return None
 
 
 if os.getenv("ZT_EAGER_INIT", "1") == "1" and os.getenv("FLASK_ENV") != "testing":
-    threading.Thread(target=_warm_up, name="warm-up", daemon=True).start()
+    threading.Thread(target=_warm_up_pipeline, name="warm-up", daemon=True).start()
 
 
 def _now() -> str:
@@ -287,7 +308,9 @@ def health_check():
         'status': 'healthy',
         'timestamp': _now(),
         'rag_initialized': _rag is not None,
-        'warm_up_error': _warm_up_error,
+        'warm_up': dict(_warm_up),
+        'uptime_seconds': int(time.time() - _started_at),
+        'memory_mb': _rss_mb(),
         'version': (os.getenv('RENDER_GIT_COMMIT') or os.getenv('GIT_COMMIT') or 'dev')[:7],
         'async_mode': socketio.async_mode,
     })

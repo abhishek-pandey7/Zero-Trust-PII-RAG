@@ -45,3 +45,6 @@ audit.log
 Thumbs.db
 # Local scratch work
 scratch/
+
+# Downloaded at build time by scripts/prefetch_models.py
+models/

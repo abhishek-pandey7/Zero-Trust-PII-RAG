@@ -2,6 +2,7 @@
 app.py – Flask web application with WebSocket support for real-time PII protection.
 """
 import os
+import re
 import sys
 import tempfile
 import threading
@@ -12,6 +13,7 @@ from datetime import UTC, datetime
 from dotenv import load_dotenv
 from flask import Flask, jsonify, render_template, request
 from flask_socketio import SocketIO, emit
+from werkzeug.utils import secure_filename
 
 from src import APIError, EgressBlockedError, ValidationError, ZeroTrustRAG, ZeroTrustRAGError
 from src.zero_trust_rag.config import Config
@@ -201,6 +203,13 @@ def api_ingest():
         return _error(e, 500)
 
 
+def _tidy_layout(text: str) -> str:
+    """Collapse the padding layout-mode extraction uses to position columns: no leading indent, any
+    run of 3+ spaces becomes two, and at most one blank line in a row."""
+    lines = [re.sub(r" {3,}", "  ", line.strip()) for line in text.splitlines()]
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+
+
 def extract_text_from_file(filepath, filename):
     """Extract text from uploaded files (PDF, DOCX, TXT)."""
     ext = filename.rsplit('.', 1)[-1].lower() if '.' in filename else ''
@@ -216,7 +225,10 @@ def extract_text_from_file(filepath, filename):
         from pypdf.errors import PdfReadError
         try:
             reader = PdfReader(filepath)
-            return '\n'.join(page.extract_text() or '' for page in reader.pages)
+            # Layout mode keeps side-by-side columns apart ("Engineering ... CGPA: 9.15"); plain mode
+            # glued them into "EngineeringCGPA", which NER then misreads
+            text = '\n'.join(page.extract_text(extraction_mode='layout') or '' for page in reader.pages)
+            return _tidy_layout(text)
         except PdfReadError as e:
             raise ValueError(f"Could not read this PDF: {e}") from None
 
@@ -232,31 +244,86 @@ def extract_text_from_file(filepath, filename):
         raise ValueError(f"Unsupported file type: .{ext}. Supported: .txt, .pdf, .docx")
 
 
+def _read_upload(file) -> tuple[str, str]:
+    """Extract the text of an uploaded file. Returns (text, safe filename); raises ValueError."""
+    filename = secure_filename(file.filename or '')
+    if not filename:
+        raise ValueError('No file selected')
+    ext = filename.rsplit('.', 1)[-1].lower() if '.' in filename else ''
+    # The temp file is named from the extension only, never from the user-supplied name
+    with tempfile.NamedTemporaryFile(delete=False, suffix=f'.{ext}' if ext.isalnum() else '') as tmp:
+        file.save(tmp.name)
+        tmp_path = tmp.name
+    try:
+        text = extract_text_from_file(tmp_path, filename)
+    finally:
+        os.unlink(tmp_path)
+    if not text or not text.strip():
+        raise ValueError('No text content found in file')
+    return text, filename
+
+
 @app.route('/api/upload', methods=['POST'])
 def api_upload():
     """Upload a document file for ingestion."""
     if 'file' not in request.files:
         return jsonify({'success': False, 'error': 'No file provided'}), 400
-    file = request.files['file']
-    if file.filename == '':
-        return jsonify({'success': False, 'error': 'No file selected'}), 400
-
-    with tempfile.NamedTemporaryFile(delete=False, suffix='_' + file.filename) as tmp:
-        file.save(tmp.name)
-        tmp_path = tmp.name
     try:
-        text = extract_text_from_file(tmp_path, file.filename)
-        if not text or not text.strip():
-            return jsonify({'success': False, 'error': 'No text content found in file'}), 400
-        response = _ingest(text, source=file.filename)
-        response.update({'filename': file.filename, 'char_count': len(text)})
+        text, filename = _read_upload(request.files['file'])
+        response = _ingest(text, source=filename)
+        response.update({'filename': filename, 'char_count': len(text)})
         return jsonify(response)
     except ValueError as e:
         return jsonify({'success': False, 'error': str(e)}), 400
     except ZeroTrustRAGError as e:
         return _error(e, 500)
-    finally:
-        os.unlink(tmp_path)
+
+
+SANITIZE_MODES = {'tokens', 'labels'}
+
+
+@app.route('/api/sanitize', methods=['POST'])
+def api_sanitize():
+    """Return a copy of a document with PII removed, for download. Nothing goes to the LLM.
+
+    mode=tokens: each value becomes its vault token (<<PERSON_01_ab12>>), consistent with every
+    other document, and reversible only through this app's vault.
+    mode=labels: each value becomes its type ([PERSON]). Irreversible; nothing is written to the
+    vault, so this is the copy that can leave the organisation.
+
+    Takes a multipart 'file' or JSON {"data": "..."}, plus 'mode'.
+    """
+    payload = request.get_json(silent=True) or {}
+    mode = (request.form.get('mode') or payload.get('mode') or 'tokens').lower()
+    if mode not in SANITIZE_MODES:
+        return jsonify({'success': False, 'error': f"mode must be one of {sorted(SANITIZE_MODES)}"}), 400
+    try:
+        if 'file' in request.files:
+            text, filename = _read_upload(request.files['file'])
+        else:
+            text, filename = (payload.get('data') or '').strip(), 'pasted-text.txt'
+        validate_input(text)
+    except (ValueError, ValidationError) as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
+
+    bot = get_rag()
+    if mode == 'tokens':
+        sanitized, log = bot.redactor.redact(text, 'export')
+        counts: dict[str, int] = {}
+        for entry in log:
+            counts[entry['entity_type']] = counts.get(entry['entity_type'], 0) + 1
+    else:
+        sanitized, counts = bot.redactor.anonymize(text)
+    bot.audit.log_operation('export', 'success', {'mode': mode, 'chars': len(text), 'entities': counts})
+
+    stem = filename.rsplit('.', 1)[0] or 'document'
+    return jsonify({
+        'success': True,
+        'mode': mode,
+        'text': sanitized,
+        'entities': counts,
+        'download_name': f"{stem}.{'masked' if mode == 'tokens' else 'redacted'}.txt",
+    })
 
 
 @app.route('/api/ask', methods=['POST'])

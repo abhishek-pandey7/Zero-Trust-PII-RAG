@@ -210,18 +210,17 @@ def extract_text_from_file(filepath, filename):
             return f.read()
 
     elif ext == 'pdf':
+        # pypdf, not PyMuPDF: importing PyMuPDF alone added ~57 MB (pypdf ~8 MB), which was enough to
+        # get the worker OOM-killed on a 512 MB host; PyMuPDF is also AGPL-licensed
+        from pypdf import PdfReader
+        from pypdf.errors import PdfReadError
         try:
-            import fitz  # PyMuPDF
-            doc = fitz.open(filepath)
-            text = ''
-            for page in doc:
-                text += page.get_text()
-            doc.close()
-            return text
-        except ImportError:
-            raise ValueError("PDF support requires PyMuPDF. Install with: pip install PyMuPDF") from None
+            reader = PdfReader(filepath)
+            return '\n'.join(page.extract_text() or '' for page in reader.pages)
+        except PdfReadError as e:
+            raise ValueError(f"Could not read this PDF: {e}") from None
 
-    elif ext in ('docx', 'doc'):
+    elif ext == 'docx':
         try:
             from docx import Document
             doc = Document(filepath)

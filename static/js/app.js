@@ -139,6 +139,7 @@
   ingestBtn.addEventListener('click', ingestData);
   queryBtn.addEventListener('click', askQuestion);
   uploadBtn.addEventListener('click', uploadFile);
+  $('sanitize-btn').addEventListener('click', downloadSanitized);
   modalBackdrop.addEventListener('click', closeModal);
   modalCloseBtn.addEventListener('click', closeModal);
 
@@ -563,6 +564,47 @@
     `;
 
     modal.classList.add('active');
+  }
+
+  // Sends the chosen file (or the pasted text) to /api/sanitize and saves the result as a .txt
+  async function downloadSanitized() {
+    const btn = $('sanitize-btn');
+    const mode = $('sanitize-mode').value;
+    const file = fileInput.files[0];
+    const text = $('ingest-data').value.trim();
+    if (!file && !text) {
+      showToast('Choose a file or paste some text first.', 'warning');
+      return;
+    }
+    setButtonLoading(btn, true);
+    try {
+      let res;
+      if (file) {
+        const form = new FormData();
+        form.append('file', file);
+        form.append('mode', mode);
+        res = await fetch('/api/sanitize', { method: 'POST', body: form });
+      } else {
+        res = await fetch('/api/sanitize', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ data: text, mode })
+        });
+      }
+      const data = await readJson(res, 'Sanitizing failed');
+      const blob = new Blob([data.text], { type: 'text/plain;charset=utf-8' });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = data.download_name;
+      link.click();
+      URL.revokeObjectURL(link.href);
+      const total = Object.values(data.entities).reduce((a, b) => a + b, 0);
+      showToast(`Saved ${data.download_name}: ${total} values removed.`, 'success');
+    } catch (err) {
+      showToast(err.message, 'error');
+    } finally {
+      setButtonLoading(btn, false);
+    }
   }
 
   // The server's JSON reply, or a readable error. A worker that restarts mid-request (out of

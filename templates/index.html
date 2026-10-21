@@ -91,6 +91,18 @@
                             <i class="ph ph-shield-plus"></i>
                             <span>Sanitize and Ingest</span>
                         </button>
+
+                        <div class="export-row">
+                            <select id="sanitize-mode" aria-label="How to remove PII from the copy">
+                                <option value="tokens">Masked with tokens: &lt;&lt;PERSON_01_ab12&gt;&gt;</option>
+                                <option value="labels">Redacted with labels: [PERSON]</option>
+                            </select>
+                            <button class="btn btn-secondary" id="sanitize-btn">
+                                <i class="ph ph-download-simple"></i>
+                                <span>Download sanitized copy</span>
+                            </button>
+                        </div>
+                        <p class="export-hint">Uses the chosen file, or the pasted text. Never sent to the LLM; the labels version isn't stored anywhere.</p>
                     </div>
 
                     <div class="card query-card">

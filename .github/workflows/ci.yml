@@ -60,6 +60,10 @@ jobs:
           python -c "import json; print(json.dumps({'data': open('records.txt').read()}))" > body.json
           curl -sf --max-time 300 -X POST localhost:5000/api/ingest -H 'Content-Type: application/json' -d @body.json             | python -c "import json,sys; r=json.load(sys.stdin); print('chunks', r['chunks_created'], 'pii', r['pii_redacted'])"
 
+      - name: Upload a PDF
+        run: |
+          curl -sf --max-time 300 -X POST localhost:5000/api/upload -F "file=@tests/fixtures/client_profile.pdf"             | python -c "import json,sys; r=json.load(sys.stdin); print('pdf chunks', r['chunks_created'], 'pii', r['pii_redacted'])"
+
       - name: Check memory
         if: always()
         run: |

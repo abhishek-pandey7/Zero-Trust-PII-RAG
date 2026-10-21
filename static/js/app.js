@@ -309,10 +309,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ data: text })
       });
-      const d = await res.json();
-      if (!res.ok) {
-        throw new Error(d.error || 'Ingestion failed');
-      }
+      const d = await readJson(res, 'Ingestion failed');
       textarea.value = '';
       showIngestModal(d);
     } catch (err) {
@@ -347,11 +344,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ question })
       });
-      if (!res.ok) {
-        const d = await res.json();
-        throw new Error(d.error || 'Query failed');
-      }
-      const data = await res.json();
+      const data = await readJson(res, 'Query failed');
       if (data.success) {
         showResultModal('Resolution Report', data);
       }
@@ -429,10 +422,8 @@
 
     try {
       const res = await fetch('/api/upload', { method: 'POST', body: formData });
-      if (!res.ok) {
-        const d = await res.json();
-        throw new Error(d.error || 'Upload failed');
-      }
+      const d = await readJson(res, 'Upload failed');
+      showIngestModal(d);
       fileInput.value = '';
       uploadFilename.classList.remove('active');
       uploadBtn.style.display = 'none';
@@ -572,6 +563,18 @@
     `;
 
     modal.classList.add('active');
+  }
+
+  // The server's JSON reply, or a readable error. A worker that restarts mid-request (out of
+  // memory, a redeploy) sends back an empty body, which res.json() reports as a cryptic parse error.
+  async function readJson(res, fallback) {
+    let data = null;
+    try { data = await res.json(); } catch (_) { /* empty or non-JSON body */ }
+    if (!data) {
+      throw new Error(`${fallback}: the server didn't answer (it may be restarting). Try again in a minute.`);
+    }
+    if (!res.ok || data.success === false) throw new Error(data.error || fallback);
+    return data;
   }
 
   // Wraps <<TOKEN>> placeholders in chips; everything else is escaped first

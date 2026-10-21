@@ -69,3 +69,29 @@ def test_warm_up_starts_on_the_first_request_in_each_process(client, monkeypatch
         if t.name == "warm-up":
             t.join(timeout=5)
     assert started == [os.getpid(), os.getpid()]
+
+
+FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures")
+
+
+def test_pdf_text_is_extracted():
+    text = web.extract_text_from_file(os.path.join(FIXTURES, "client_profile.pdf"), "client_profile.pdf")
+    assert "Margaret Ellison" in text and "536-22-1874" in text
+
+
+def test_docx_text_is_extracted(tmp_path):
+    from docx import Document
+
+    path = tmp_path / "profile.docx"
+    doc = Document()
+    doc.add_paragraph("Client Name: Margaret Ellison")
+    doc.save(path)
+    assert "Margaret Ellison" in web.extract_text_from_file(str(path), "profile.docx")
+
+
+def test_unreadable_pdf_is_a_clear_400(client):
+    import io
+
+    response = client.post("/api/upload", data={"file": (io.BytesIO(b"not a pdf"), "broken.pdf")})
+    assert response.status_code == 400
+    assert "PDF" in response.get_json()["error"]

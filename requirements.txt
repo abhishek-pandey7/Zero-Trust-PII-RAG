@@ -23,5 +23,5 @@ eventlet==0.41.0
 simple-websocket==1.1.0
 
 # Document upload
-PyMuPDF==1.24.0
+pypdf==6.21.1
 python-docx==1.2.0

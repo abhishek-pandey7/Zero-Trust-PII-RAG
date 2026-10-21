@@ -100,3 +100,52 @@ def test_unreadable_pdf_is_a_clear_400(client):
 def test_layout_padding_is_collapsed():
     raw = "      Dwarkadas College                                CGPA: 9.15\n\n\n\n   B.Tech        2024 – 2028"
     assert web._tidy_layout(raw) == "Dwarkadas College  CGPA: 9.15\n\nB.Tech  2024 – 2028"
+
+
+@pytest.fixture
+def live_rag(monkeypatch, tmp_path, redactor, vault, audit):
+    """The app's pipeline, built with the fake LLM and embedder so no API key or model is needed."""
+    from src.zero_trust_rag.pipeline import ZeroTrustRAG
+
+    from .fakes import HashingEmbedder, RecordingLLM
+
+    rag = ZeroTrustRAG(persist_directory=str(tmp_path / "chroma"), llm=RecordingLLM(),
+                       embedder=HashingEmbedder(), vault=vault, audit=audit, redactor=redactor)
+    monkeypatch.setattr(web, "_rag", rag)
+    return rag
+
+
+RECORD = "Client Name: Margaret Ellison\nSSN: 536-22-1874\nEmail: m.ellison@example.com"
+
+
+def test_sanitize_with_labels_is_irreversible_and_stores_nothing(client, live_rag):
+    body = client.post("/api/sanitize", json={"data": RECORD, "mode": "labels"}).get_json()
+    assert body["success"] and body["download_name"] == "pasted-text.redacted.txt"
+    assert body["text"] == "Client Name: [PERSON]\nSSN: [US_SSN]\nEmail: [EMAIL_ADDRESS]"
+    assert body["entities"] == {"PERSON": 1, "US_SSN": 1, "EMAIL_ADDRESS": 1}
+    assert live_rag.vault.get_all_mappings() == []
+
+
+def test_sanitize_with_tokens_uses_the_vault(client, live_rag):
+    body = client.post("/api/sanitize", json={"data": RECORD, "mode": "tokens"}).get_json()
+    assert "Margaret Ellison" not in body["text"] and "<<US_SSN_" in body["text"]
+    assert live_rag.redactor.unmask(body["text"]) == RECORD
+
+
+def test_sanitize_a_pdf_upload(client, live_rag):
+    with open(os.path.join(FIXTURES, "client_profile.pdf"), "rb") as f:
+        body = client.post("/api/sanitize", data={"file": (f, "client_profile.pdf"), "mode": "labels"}).get_json()
+    assert body["download_name"] == "client_profile.redacted.txt"
+    assert "536-22-1874" not in body["text"] and "[US_SSN]" in body["text"]
+
+
+def test_sanitize_rejects_an_unknown_mode(client):
+    assert client.post("/api/sanitize", json={"data": "x", "mode": "shred"}).status_code == 400
+
+
+def test_upload_filenames_cannot_steer_the_temp_path(client, live_rag):
+    import io
+
+    response = client.post("/api/upload", data={"file": (io.BytesIO(RECORD.encode()), "../../evil.txt")})
+    assert response.status_code == 200
+    assert response.get_json()["filename"] == "evil.txt"

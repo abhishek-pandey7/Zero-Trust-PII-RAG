@@ -326,5 +326,23 @@ class PIIRedactor:
     def redact_batch(self, texts: list[str], event_type: str = "batch") -> list[tuple[str, list[dict]]]:
         return [self.redact(text, event_type) for text in texts]
 
+    def anonymize(self, text: str) -> tuple[str, dict[str, int]]:
+        """Replace each detected value with its type label, e.g. '[US_SSN]'. Irreversible.
+
+        Unlike redact(), nothing is written to the vault: there is no token to resolve later, so the
+        output can leave the organisation. Returns the text and a count per entity type.
+        """
+        sanitized = self.sanitize_input(text)
+        pieces: list[str] = []
+        counts: dict[str, int] = {}
+        cursor = 0
+        for span in self.detect(sanitized):
+            pieces.append(sanitized[cursor:span.start])
+            pieces.append(f"[{span.entity_type}]")
+            counts[span.entity_type] = counts.get(span.entity_type, 0) + 1
+            cursor = span.end
+        pieces.append(sanitized[cursor:])
+        return "".join(pieces), counts
+
     def unmask(self, text: str) -> str:
         return self.vault.unmask_text(text)

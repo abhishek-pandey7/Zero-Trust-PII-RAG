@@ -95,3 +95,8 @@ def test_unreadable_pdf_is_a_clear_400(client):
     response = client.post("/api/upload", data={"file": (io.BytesIO(b"not a pdf"), "broken.pdf")})
     assert response.status_code == 400
     assert "PDF" in response.get_json()["error"]
+
+
+def test_layout_padding_is_collapsed():
+    raw = "      Dwarkadas College                                CGPA: 9.15\n\n\n\n   B.Tech        2024 – 2028"
+    assert web._tidy_layout(raw) == "Dwarkadas College  CGPA: 9.15\n\nB.Tech  2024 – 2028"

@@ -2,6 +2,7 @@
 app.py – Flask web application with WebSocket support for real-time PII protection.
 """
 import os
+import re
 import sys
 import tempfile
 import threading
@@ -201,6 +202,13 @@ def api_ingest():
         return _error(e, 500)
 
 
+def _tidy_layout(text: str) -> str:
+    """Collapse the padding layout-mode extraction uses to position columns: no leading indent, any
+    run of 3+ spaces becomes two, and at most one blank line in a row."""
+    lines = [re.sub(r" {3,}", "  ", line.strip()) for line in text.splitlines()]
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+
+
 def extract_text_from_file(filepath, filename):
     """Extract text from uploaded files (PDF, DOCX, TXT)."""
     ext = filename.rsplit('.', 1)[-1].lower() if '.' in filename else ''
@@ -216,7 +224,10 @@ def extract_text_from_file(filepath, filename):
         from pypdf.errors import PdfReadError
         try:
             reader = PdfReader(filepath)
-            return '\n'.join(page.extract_text() or '' for page in reader.pages)
+            # Layout mode keeps side-by-side columns apart ("Engineering ... CGPA: 9.15"); plain mode
+            # glued them into "EngineeringCGPA", which NER then misreads
+            text = '\n'.join(page.extract_text(extraction_mode='layout') or '' for page in reader.pages)
+            return _tidy_layout(text)
         except PdfReadError as e:
             raise ValueError(f"Could not read this PDF: {e}") from None
 

@@ -190,3 +190,25 @@ def test_field_labels_themselves_are_not_tokenized(redactor):
     assert redactor._trim(text, label) is None
     masked, _ = redactor.redact("CLIENT PROFILE\n" + text)
     assert masked.splitlines()[1].startswith("Client Name: <<PERSON_")
+
+
+@pytest.mark.parametrize("text", ["Graduating 2024 – 2028.", "Joined in 2026.", "Tokens cut from 24h to 8h."])
+def test_bare_years_and_durations_are_not_tokenized(redactor, text):
+    assert redactor.redact(text)[0] == text
+
+
+def test_dates_with_a_month_or_day_are_still_masked(redactor):
+    masked, _ = redactor.redact("DOB: 03/14/1961. Expected graduation: May 2028.")
+    assert "03/14/1961" not in masked
+
+
+@pytest.mark.parametrize("word", ["B.Tech", "Node.js", "Ph.D"])
+def test_capitalised_abbreviations_are_not_urls(redactor, word):
+    masked, log = redactor.redact(f"Studied {word} at college.")
+    assert word in masked
+    assert "URL" not in {e["entity_type"] for e in log}
+
+
+def test_real_web_addresses_are_still_masked(redactor):
+    masked, _ = redactor.redact("Portfolio: https://margaret-ellison.example.com/about and www.ellison.dev")
+    assert "margaret-ellison" not in masked and "ellison.dev" not in masked

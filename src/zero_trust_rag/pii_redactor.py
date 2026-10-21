@@ -49,6 +49,25 @@ BLOCK_CHARS = 4000
 GENERIC_ENTITIES = {"DATE_TIME", "LOCATION", "NRP", "URL"}
 
 
+YEARS_ONLY = re.compile(r"^\s*(?:19|20)\d{2}(?:\s*[-–—]\s*(?:(?:19|20)\d{2}|present))?\s*$", re.IGNORECASE)
+DURATION = re.compile(
+    r"^\s*\d+(?:\.\d+)?\s*(?:h|hrs?|hours?|m|mins?|minutes?|s|secs?|seconds?|d|days?|wks?|weeks?|"
+    r"mos?|months?|yrs?|years?)\s*$",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_abbreviation(span: str) -> bool:
+    """True for 'B.Tech' or 'Node.js': one word, no scheme, no 'www.', no path, and a capital letter.
+    People write real domains in lowercase ('example.com'), and those are still masked."""
+    s = span.strip()
+    return (
+        " " not in s and "/" not in s and "@" not in s
+        and not s.lower().startswith(("http", "www."))
+        and any(c.isupper() for c in s)
+    )
+
+
 def _priority(entity_type: str) -> int:
     if entity_type in GENERIC_ENTITIES:
         return 0
@@ -238,6 +257,15 @@ class PIIRedactor:
 
         if result.entity_type == "DATE_TIME" and not re.search(r"\d", text[start:end]):
             # "quarterly", "last year", "Monday": relative dates identify no one
+            return None
+
+        if result.entity_type == "DATE_TIME" and (YEARS_ONLY.match(text[start:end]) or DURATION.match(text[start:end])):
+            # "2026", "2024 – 2028", "24h": a bare year or a duration identifies no one (HIPAA Safe
+            # Harbor keeps years too). Dates with a month or a day are still masked.
+            return None
+
+        if result.entity_type == "URL" and _looks_like_abbreviation(text[start:end]):
+            # "B.Tech", "Ph.D", "Node.js": .tech and .js look like domains, but these aren't addresses
             return None
 
         if text[start:end].lower() in _LABEL_TO_ENTITY and text[end:end + 2].lstrip(" \t")[:1] in (":", "="):

@@ -240,6 +240,10 @@ class PIIRedactor:
             # "quarterly", "last year", "Monday": relative dates identify no one
             return None
 
+        if text[start:end].lower() in _LABEL_TO_ENTITY and text[end:end + 2].lstrip(" \t")[:1] in (":", "="):
+            # A field label ("Client Name:") is structure, not data; NER sometimes tags it as a name
+            return None
+
         if end <= start:
             return None
         return RecognizerResult(result.entity_type, start, end, result.score)

@@ -180,3 +180,13 @@ def test_blocking_finds_the_same_values_as_one_pass(redactor, monkeypatch):
     monkeypatch.setattr(module.PIIRedactor._blocks, "__defaults__", (120,))
     blocked = [(r.entity_type, r.start, r.end) for r in redactor.detect(record)]
     assert blocked == whole
+
+
+def test_field_labels_themselves_are_not_tokenized(redactor):
+    from presidio_analyzer import RecognizerResult as R
+
+    text = "Client Name: Margaret Ellison"
+    label = R("PERSON", start=0, end=11, score=0.85)
+    assert redactor._trim(text, label) is None
+    masked, _ = redactor.redact("CLIENT PROFILE\n" + text)
+    assert masked.splitlines()[1].startswith("Client Name: <<PERSON_")
